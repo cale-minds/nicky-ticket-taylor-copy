@@ -74,6 +74,14 @@ DATABASE_PATH=./data/integration.sqlite3
 DEFAULT_TENANT_ID=default
 DRY_RUN=true
 ADMIN_TOKEN=
+ADMIN_SESSION_SECRET=change-this-in-production
+ADMIN_SESSION_MAX_AGE_SECONDS=28800
+AUTH0_DOMAIN=
+AUTH0_CLIENT_ID=
+AUTH0_CLIENT_SECRET=
+AUTH0_AUDIENCE=
+AUTH0_CALLBACK_PATH=/admin-ui/callback
+ADMIN_ALLOWED_ROLES=Admin,Support
 
 TICKET_TAILOR_API_KEY=
 TICKET_TAILOR_WEBHOOK_SIGNING_SECRET=
@@ -104,6 +112,123 @@ https://pay.nicky.me/payment-report/{receiverShortId}?paymentId={bill.shortId}
 ```
 
 The current Nicky public API authenticates public-account operations with `X-API-KEY`. The webhook type for payment-request status changes is `PaymentRequest_StatusChanged`, enum value `2`.
+
+## Admin Web Console
+
+The service includes a server-rendered admin console at:
+
+```text
+http://localhost:8017/admin-ui
+```
+
+Use it to manage the core tenant mapping, inspect order mappings, review recent webhook deliveries, register/test Nicky webhooks, recreate Nicky Payment Requests, manually confirm Ticket Tailor payments, and trigger overdue-order expiration.
+
+The dashboard is built for the same multi-tenant model used by the API:
+
+```text
+tenant_id | ticket_tailor_api_key | nicky_api_key | nicky_default_blockchain_asset_id
+```
+
+### Local Admin Token Login
+
+For local development or controlled test environments, set:
+
+```dotenv
+ADMIN_TOKEN=choose-a-local-admin-token
+ADMIN_SESSION_SECRET=choose-a-long-random-session-secret
+ADMIN_SESSION_MAX_AGE_SECONDS=28800
+```
+
+Then open `/admin-ui/login` and paste the admin token. The same token still works for API calls through the `X-Admin-Token` header.
+
+When neither `ADMIN_TOKEN` nor Auth0 is configured, admin API routes are open for development. Production deployments should always configure either `ADMIN_TOKEN` or Auth0.
+
+### Auth0 Login
+
+The web console redirects unauthenticated admin users to Auth0 Universal Login, matching the Nicky Admin Tools behavior. If the Auth0 tenant has social connections enabled, the hosted Auth0 page is where users see options such as Google, Microsoft, GitHub, Discord, Apple, and passwordless/email login.
+
+Configure Auth0 and set:
+
+```dotenv
+AUTH0_DOMAIN=your-tenant.region.auth0.com
+AUTH0_CLIENT_ID=...
+AUTH0_CLIENT_SECRET=
+AUTH0_AUDIENCE=
+AUTH0_CALLBACK_PATH=/admin-ui/callback
+ADMIN_ALLOWED_ROLES=Admin,Support
+ADMIN_SESSION_SECRET=choose-a-long-random-session-secret
+ADMIN_SESSION_MAX_AGE_SECONDS=28800
+```
+
+Add this callback URL to the Auth0 application:
+
+```text
+https://YOUR_PUBLIC_URL/admin-ui/callback
+```
+
+For local-only testing, also allow:
+
+```text
+http://localhost:8017/admin-ui/callback
+```
+
+`AUTH0_CLIENT_SECRET` is optional. Leave it empty when using a public Auth0 client like the Nicky Admin Tools SPA client; the service uses Authorization Code with PKCE in that mode. Set it only when using a confidential Regular Web Application client.
+
+You can reuse the same Auth0 tenant and public client used by Nicky Admin Tools, but the callback URL must point back to this FastAPI service. Do not reuse the existing Admin Tools callback such as `/authentication/login-callback` unless that exact URL is routed to this service. If Auth0 redirects to the existing frontend callback, the frontend receives the authorization code and this service cannot create its admin session.
+
+For a first local test with the existing Nicky Angular development Auth0 client, run the compatibility helper:
+
+```bat
+start-local-auth0-compat.bat
+```
+
+or on Linux/macOS:
+
+```bash
+./start-local-auth0-compat.sh
+```
+
+This starts the FastAPI app at:
+
+```text
+http://localhost:4200/overview
+```
+
+and uses the Angular development callback style:
+
+```text
+AUTH0_CALLBACK_PATH=/overview
+```
+
+so the Auth0 `redirect_uri` becomes:
+
+```text
+http://localhost:4200/overview
+```
+
+The helper defaults to the development Angular Auth0 configuration found in the Nicky frontend:
+
+```dotenv
+AUTH0_DOMAIN=dev-eq0ptfwdhb1s1h12.us.auth0.com
+AUTH0_CLIENT_ID=SqrJq2fxJ6adrOFaR24oh9COF4vZwqba
+AUTH0_AUDIENCE=https://nicky-tech.azurewebsites.net
+```
+
+It also defaults to `ADMIN_ALLOWED_ROLES=*` so any successfully authenticated Auth0 user can enter the local admin console during this compatibility test. For shared environments, public tunnel, or production testing, keep role checks enabled with values such as `ADMIN_ALLOWED_ROLES=Admin,Support` and use the generated service callback URL instead, usually `https://YOUR_PUBLIC_URL/admin-ui/callback`.
+
+The implementation accepts signed Auth0 sessions in the browser and bearer tokens for admin API calls. Browser sessions use `ADMIN_SESSION_MAX_AGE_SECONDS`; Auth0 sessions are also rejected when the token `exp` claim is expired. It extracts roles from common Auth0 role/permission claims, including namespaced claims, and allows access when at least one role matches `ADMIN_ALLOWED_ROLES` case-insensitively. This mirrors the Nicky Admin Tools pattern of protecting admin operations with Auth0 roles such as `Admin` and `Support`.
+
+Auth0 references:
+
+- Authorization Code Flow: https://auth0.com/docs/get-started/authentication-and-authorization-flow/authorization-code-flow
+- Role-Based Access Control: https://auth0.com/docs/get-started/apis/enable-role-based-access-control-for-apis
+
+### Admin Screens
+
+- `Dashboard`: active tenants, orders, pending orders, Nicky Payment Requests, and recent webhook deliveries.
+- `Tenants`: create and edit tenant mappings, API keys, webhook secrets, Nicky defaults, and automation flags.
+- `Tenant detail`: copy generated Ticket Tailor and Nicky webhook URLs, register the Nicky webhook, and send a Nicky test status webhook.
+- `Orders`: inspect one Ticket Tailor order to one Nicky Payment Request mapping, current status, buyer/order metadata, and action logs.
 
 ## Create A Tenant
 
@@ -390,6 +515,16 @@ Both helpers expect FastAPI to be running locally at:
 http://127.0.0.1:8017
 ```
 
+If FastAPI is not already responding, the helpers start it automatically with:
+
+```text
+APP_BASE_URL=https://YOUR-TRYCLOUDFLARE-URL
+NICKY_SUCCESS_URL=https://YOUR-TRYCLOUDFLARE-URL/nicky/success
+NICKY_CANCEL_URL=https://YOUR-TRYCLOUDFLARE-URL/nicky/cancel
+```
+
+Set `START_FASTAPI=false` if you want the helper to create only the tunnel. If FastAPI is already running, restart it with the public `APP_BASE_URL` before testing Auth0 callbacks through the tunnel.
+
 Override defaults with environment variables when needed:
 
 ```bash
@@ -425,6 +560,12 @@ The local `tools/cloudflared*` binaries are intentionally ignored by Git because
 Typical output includes:
 
 ```text
+Admin UI:
+https://YOUR-TRYCLOUDFLARE-URL/admin-ui
+
+Auth0 callback URL:
+https://YOUR-TRYCLOUDFLARE-URL/admin-ui/callback
+
 Ticket Tailor webhook:
 https://YOUR-TRYCLOUDFLARE-URL/webhooks/ticket-tailor/demo-tenant
 
@@ -446,7 +587,7 @@ or:
 ./tail-microservice-logs.sh
 ```
 
-If FastAPI was already running before the tunnel was created, restart it so `APP_BASE_URL`, `NICKY_SUCCESS_URL`, and `NICKY_CANCEL_URL` are picked up by the process.
+For Auth0, add the printed `Auth0 callback URL` to the Auth0 application's allowed callback URLs before testing login through the public tunnel.
 
 ## Manual Operations
 

@@ -7,9 +7,14 @@ TOOLS_DIR="${TOOLS_DIR:-"$ROOT/tools"}"
 CLOUDFLARED="${CLOUDFLARED:-"$TOOLS_DIR/cloudflared"}"
 LOG_DIR="${LOG_DIR:-"$ROOT/logs"}"
 LOG_FILE="${LOG_FILE:-"$LOG_DIR/cloudflared-sh.log"}"
+FASTAPI_LOG_FILE="${FASTAPI_LOG_FILE:-"$LOG_DIR/fastapi-sh.log"}"
 URL_FILE="${URL_FILE:-"$ROOT/tunnel-urls.txt"}"
 
 LOCAL_URL="${LOCAL_URL:-http://127.0.0.1:8017}"
+FASTAPI_HOST="${FASTAPI_HOST:-127.0.0.1}"
+FASTAPI_PORT="${FASTAPI_PORT:-8017}"
+START_FASTAPI="${START_FASTAPI:-true}"
+FASTAPI_EXE="${FASTAPI_EXE:-}"
 TENANT_ID="${TENANT_ID:-demo-tenant}"
 NICKY_WEBHOOK_TOKEN="${NICKY_WEBHOOK_TOKEN:-tenant_webhook_token_here}"
 
@@ -115,15 +120,51 @@ fi
 
 HEALTH_URL="$PUBLIC_URL/health"
 DOCS_URL="$PUBLIC_URL/docs"
+ADMIN_UI_URL="$PUBLIC_URL/admin-ui"
+AUTH0_CALLBACK_URL="$PUBLIC_URL/admin-ui/callback"
 TICKET_TAILOR_WEBHOOK_URL="$PUBLIC_URL/webhooks/ticket-tailor/$TENANT_ID"
 NICKY_WEBHOOK_URL="$PUBLIC_URL/webhooks/nicky/$TENANT_ID?token=$NICKY_WEBHOOK_TOKEN"
 NICKY_SUCCESS_URL="$PUBLIC_URL/nicky/success"
 NICKY_CANCEL_URL="$PUBLIC_URL/nicky/cancel"
 
+if [[ "$START_FASTAPI" == "true" ]]; then
+  if curl -fsS "$LOCAL_URL/health" >/dev/null 2>&1; then
+    echo "FastAPI already responded at $LOCAL_URL/health."
+    echo "If Auth0 must use the public URL, confirm the current process was started with APP_BASE_URL=$PUBLIC_URL."
+  else
+    if [[ -z "$FASTAPI_EXE" ]]; then
+      if [[ -x "$ROOT/.venv/bin/python" ]]; then
+        FASTAPI_EXE="$ROOT/.venv/bin/python"
+      else
+        FASTAPI_EXE="python"
+      fi
+    fi
+
+    echo "FastAPI did not respond at $LOCAL_URL/health."
+    echo "Starting FastAPI with APP_BASE_URL=$PUBLIC_URL ..."
+    APP_BASE_URL="$PUBLIC_URL" \
+      NICKY_SUCCESS_URL="$NICKY_SUCCESS_URL" \
+      NICKY_CANCEL_URL="$NICKY_CANCEL_URL" \
+      nohup "$FASTAPI_EXE" -m uvicorn app.main:app --host "$FASTAPI_HOST" --port "$FASTAPI_PORT" >"$FASTAPI_LOG_FILE" 2>&1 &
+    FASTAPI_PID="$!"
+    echo "$FASTAPI_PID" > "$LOG_DIR/fastapi.pid"
+
+    for _ in $(seq 1 30); do
+      if curl -fsS "$LOCAL_URL/health" >/dev/null 2>&1; then
+        echo "FastAPI ready at $LOCAL_URL"
+        break
+      fi
+      sleep 1
+    done
+  fi
+fi
+
 cat > "$URL_FILE" <<EOF
 Public URL: $PUBLIC_URL
 Health: $HEALTH_URL
 Docs: $DOCS_URL
+Admin UI: $ADMIN_UI_URL
+Auth0 callback URL: $AUTH0_CALLBACK_URL
 
 Ticket Tailor webhook:
 $TICKET_TAILOR_WEBHOOK_URL
@@ -139,6 +180,9 @@ $NICKY_CANCEL_URL
 
 Local service expected at:
 $LOCAL_URL
+
+FastAPI log:
+$FASTAPI_LOG_FILE
 
 Cloudflared log:
 $LOG_FILE

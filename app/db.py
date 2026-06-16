@@ -300,12 +300,71 @@ class Database:
             ).fetchone()
         return tenant_from_row(row) if row else None
 
-    def list_tenants(self) -> list[TenantConfig]:
+    def list_tenants(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        query: str | None = None,
+        active: str | None = None,
+        configuration: str | None = None,
+    ) -> list[TenantConfig]:
         with self.connect() as conn:
+            where_clause, params = self._tenant_filters(query, active, configuration)
+            limit_clause = ""
+            if limit is not None:
+                limit_clause = "LIMIT ? OFFSET ?"
+                params.extend([max(1, limit), max(0, offset)])
             rows = conn.execute(
-                "SELECT * FROM tenants ORDER BY created_at DESC, tenant_id ASC"
+                f"""
+                SELECT * FROM tenants
+                {where_clause}
+                ORDER BY created_at DESC, tenant_id ASC
+                {limit_clause}
+                """,
+                params,
             ).fetchall()
         return [tenant_from_row(row) for row in rows]
+
+    def count_tenants(
+        self,
+        *,
+        query: str | None = None,
+        active: str | None = None,
+        configuration: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            where_clause, params = self._tenant_filters(query, active, configuration)
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM tenants {where_clause}",
+                params,
+            ).fetchone()
+            return int(row["count"] if row else 0)
+
+    @staticmethod
+    def _tenant_filters(
+        query: str | None, active: str | None, configuration: str | None
+    ) -> tuple[str, list[Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if query:
+            conditions.append("(tenant_id LIKE ? OR name LIKE ?)")
+            like = f"%{query}%"
+            params.extend([like, like])
+        if active == "active":
+            conditions.append("active = 1")
+        elif active == "inactive":
+            conditions.append("active = 0")
+        if configuration == "complete":
+            conditions.append("ticket_tailor_api_key != ''")
+            conditions.append("nicky_api_key != ''")
+            conditions.append("nicky_default_blockchain_asset_id != ''")
+        elif configuration == "missing":
+            conditions.append(
+                "(ticket_tailor_api_key = '' OR nicky_api_key = '' OR nicky_default_blockchain_asset_id = '')"
+            )
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return where_clause, params
 
     def insert_webhook_event(
         self,
@@ -542,30 +601,181 @@ class Database:
                 (tenant_id, ticket_tailor_order_id),
             ).fetchone()
 
-    def list_orders(self, limit: int = 50, tenant_id: str | None = None) -> list[sqlite3.Row]:
+    def list_orders(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        tenant_id: str | None = None,
+        updated_from: str | None = None,
+        updated_to: str | None = None,
+        order_state: str | None = None,
+    ) -> list[sqlite3.Row]:
         with self.connect() as conn:
-            if tenant_id:
-                return list(
-                    conn.execute(
-                        """
-                        SELECT * FROM integration_orders
-                        WHERE tenant_id = ?
-                        ORDER BY updated_at DESC
-                        LIMIT ?
-                        """,
-                        (tenant_id, limit),
-                    ).fetchall()
-                )
+            where_clause, params = self._order_filters(
+                tenant_id, updated_from, updated_to, order_state
+            )
+            params.extend([max(1, limit), max(0, offset)])
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT * FROM integration_orders
+                    {where_clause}
+                    ORDER BY updated_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params,
+                ).fetchall()
+            )
+
+    def count_orders(
+        self,
+        *,
+        tenant_id: str | None = None,
+        updated_from: str | None = None,
+        updated_to: str | None = None,
+        order_state: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            where_clause, params = self._order_filters(
+                tenant_id, updated_from, updated_to, order_state
+            )
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM integration_orders {where_clause}",
+                params,
+            ).fetchone()
+            return int(row["count"] if row else 0)
+
+    @staticmethod
+    def _order_filters(
+        tenant_id: str | None,
+        updated_from: str | None,
+        updated_to: str | None,
+        order_state: str | None,
+    ) -> tuple[str, list[Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if tenant_id:
+            conditions.append("tenant_id = ?")
+            params.append(tenant_id)
+        if updated_from:
+            conditions.append("date(updated_at) >= date(?)")
+            params.append(updated_from)
+        if updated_to:
+            conditions.append("date(updated_at) <= date(?)")
+            params.append(updated_to)
+        if order_state == "confirmed":
+            conditions.append("ticket_tailor_confirmed_at IS NOT NULL")
+        elif order_state == "tickets_voided":
+            conditions.append("ticket_tailor_tickets_voided_at IS NOT NULL")
+        elif order_state == "pending":
+            conditions.append("ticket_tailor_confirmed_at IS NULL")
+            conditions.append("ticket_tailor_tickets_voided_at IS NULL")
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return where_clause, params
+
+    def list_webhook_events(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        tenant_id: str | None = None,
+        received_from: str | None = None,
+        received_to: str | None = None,
+        status: str | None = None,
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            where_clause, params = self._webhook_filters(
+                tenant_id, received_from, received_to, status
+            )
+            params.extend([max(1, limit), max(0, offset)])
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT tenant_id, source, event_id, event_type, received_at,
+                           processed_at, status, error
+                    FROM webhook_events
+                    {where_clause}
+                    ORDER BY received_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params,
+                ).fetchall()
+            )
+
+    def count_webhook_events(
+        self,
+        *,
+        tenant_id: str | None = None,
+        received_from: str | None = None,
+        received_to: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            where_clause, params = self._webhook_filters(
+                tenant_id, received_from, received_to, status
+            )
+            row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM webhook_events {where_clause}",
+                params,
+            ).fetchone()
+            return int(row["count"] if row else 0)
+
+    @staticmethod
+    def _webhook_filters(
+        tenant_id: str | None,
+        received_from: str | None,
+        received_to: str | None,
+        status: str | None,
+    ) -> tuple[str, list[Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if tenant_id:
+            conditions.append("tenant_id = ?")
+            params.append(tenant_id)
+        if received_from:
+            conditions.append("date(received_at) >= date(?)")
+            params.append(received_from)
+        if received_to:
+            conditions.append("date(received_at) <= date(?)")
+            params.append(received_to)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return where_clause, params
+
+    def list_order_logs(
+        self,
+        tenant_id: str,
+        ticket_tailor_order_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
             return list(
                 conn.execute(
                     """
-                    SELECT * FROM integration_orders
-                    ORDER BY updated_at DESC
-                    LIMIT ?
+                    SELECT id, tenant_id, ticket_tailor_order_id, event_type, message,
+                           payload_json, created_at
+                    FROM order_logs
+                    WHERE tenant_id = ? AND ticket_tailor_order_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ? OFFSET ?
                     """,
-                    (limit,),
+                    (tenant_id, ticket_tailor_order_id, max(1, limit), max(0, offset)),
                 ).fetchall()
             )
+
+    def count_order_logs(self, tenant_id: str, ticket_tailor_order_id: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM order_logs
+                WHERE tenant_id = ? AND ticket_tailor_order_id = ?
+                """,
+                (tenant_id, ticket_tailor_order_id),
+            ).fetchone()
+            return int(row["count"] if row else 0)
 
     def log(
         self,

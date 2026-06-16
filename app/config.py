@@ -46,7 +46,7 @@ def _csv_env(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return [item.strip().lower() for item in raw.split(",") if item.strip()]
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 @dataclass(frozen=True)
@@ -102,12 +102,29 @@ class Settings:
     skip_nicky: bool = _bool_env("SKIP_NICKY", False)
 
     admin_token: str = os.getenv("ADMIN_TOKEN", "")
+    admin_session_secret: str = os.getenv(
+        "ADMIN_SESSION_SECRET", "development-admin-session-secret"
+    )
+    admin_session_max_age_seconds: int = _int_env("ADMIN_SESSION_MAX_AGE_SECONDS", 28800)
+    auth0_domain: str = os.getenv("AUTH0_DOMAIN", "").strip().rstrip("/")
+    auth0_client_id: str = os.getenv("AUTH0_CLIENT_ID", "")
+    auth0_client_secret: str = os.getenv("AUTH0_CLIENT_SECRET", "")
+    auth0_audience: str = os.getenv("AUTH0_AUDIENCE", "")
+    auth0_callback_path: str = os.getenv("AUTH0_CALLBACK_PATH", "/admin-ui/callback")
+    admin_allowed_roles: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "ticket_tailor_offline_payment_keywords",
-            _csv_env("TICKET_TAILOR_OFFLINE_PAYMENT_KEYWORDS", ["nicky", "nicky payment"]),
+            [item.lower() for item in _csv_env(
+                "TICKET_TAILOR_OFFLINE_PAYMENT_KEYWORDS", ["nicky", "nicky payment"]
+            )],
+        )
+        object.__setattr__(
+            self,
+            "admin_allowed_roles",
+            _csv_env("ADMIN_ALLOWED_ROLES", ["Admin", "Support"]),
         )
 
 

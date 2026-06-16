@@ -9,7 +9,10 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
+from app import admin_auth
+from app.admin_ui import create_admin_ui_router
 from app.config import Settings, get_settings
 from app.db import Database
 from app.nicky import NickyClient
@@ -90,6 +93,13 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.admin_session_secret,
+    same_site="lax",
+    https_only=settings.app_base_url.startswith("https://"),
+    max_age=settings.admin_session_max_age_seconds,
+)
 
 
 def model_data(model: BaseModel) -> dict[str, Any]:
@@ -98,9 +108,32 @@ def model_data(model: BaseModel) -> dict[str, Any]:
     return model.dict(exclude_unset=True)
 
 
-def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
-    if settings.admin_token and x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin token")
+def require_admin(
+    request: Request,
+    x_admin_token: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> admin_auth.AdminUser | None:
+    user = admin_auth.authenticate_admin_request(
+        settings,
+        request,
+        x_admin_token=x_admin_token,
+        authorization=authorization,
+    )
+    if user:
+        return user
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin authentication required")
+
+
+app.include_router(
+    create_admin_ui_router(
+        settings=settings,
+        db=db,
+        nicky_client=nicky_client,
+        service=service,
+        require_admin=require_admin,
+    )
+)
 
 
 def get_tenant_or_404(tenant_id: str, *, require_active: bool = False) -> TenantConfig:
