@@ -5,7 +5,7 @@ import html
 import json
 import secrets
 import urllib.parse
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,12 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app import admin_auth
-from app.config import Settings
+from app.config import Settings, external_api_url
 from app.db import Database
-from app.nicky import NickyClient
+from app.nicky import NickyApiError, NickyClient
 from app.service import IntegrationService, row_to_dict
 from app.tenants import (
-    NICKY_PAYMENT_KEYWORDS,
     NICKY_WEBHOOK_TYPE,
     TenantConfig,
     normalize_tenant_id,
@@ -30,6 +29,14 @@ from app.tenants import (
 AdminDependency = Callable[..., Any]
 DEFAULT_PAGE_SIZE = 10
 DASHBOARD_PAGE_SIZE = 5
+NO_TENANT_SCOPE = "__nicky_no_tenant_scope__"
+
+
+@dataclass(frozen=True)
+class TenantScope:
+    tenant_filters: dict[str, str]
+    order_tenant_id: str | None
+    scoped: bool
 
 
 def create_admin_ui_router(
@@ -51,7 +58,6 @@ def create_admin_ui_router(
         user = admin_auth.authenticate_admin_request(
             settings,
             request,
-            x_admin_token=request.headers.get("x-admin-token"),
             authorization=request.headers.get("authorization"),
         )
         if user:
@@ -73,10 +79,6 @@ def create_admin_ui_router(
                 status_code=303,
             )
         raise HTTPException(status_code=503, detail="Auth0 is required but is not configured")
-
-    @router.post("/admin-ui/login/admin-token")
-    async def login_admin_token(request: Request):
-        raise HTTPException(status_code=404, detail="Local admin-token UI login is disabled")
 
     async def complete_auth0_login(
         request: Request, code: str | None = None, state: str | None = None
@@ -121,25 +123,30 @@ def create_admin_ui_router(
             return RedirectResponse(admin_auth.build_auth0_logout_url(settings), status_code=303)
         return RedirectResponse("/admin-ui/login", status_code=303)
 
+    @router.get("/", response_class=HTMLResponse)
     @router.get("/admin-ui", response_class=HTMLResponse)
     @router.get("/admin-ui/", response_class=HTMLResponse)
     async def dashboard(
         request: Request, user: admin_auth.AdminUser = Depends(require_admin_web)
     ):
-        owner_uuid = scoped_owner_uuid(user, settings)
-        tenants = db.list_tenants(nicky_user_uuid=owner_uuid)
-        order_filters = scoped_order_filters(dashboard_order_filters(request), owner_uuid)
-        webhook_filters = scoped_webhook_filters(dashboard_webhook_filters(request), owner_uuid)
+        tenant_scope = scoped_tenant_scope(user, settings, db)
+        tenants = db.list_tenants(**tenant_scope.tenant_filters)
+        order_filters = scoped_order_filters(
+            dashboard_order_filters(request), tenant_scope.order_tenant_id
+        )
+        webhook_filters = scoped_webhook_filters(
+            dashboard_webhook_filters(request), tenant_scope.order_tenant_id
+        )
         tenants_page_number = page_query_value(request.query_params.get("tenants_page"))
         orders_page_number = page_query_value(request.query_params.get("orders_page"))
         webhooks_page_number = page_query_value(request.query_params.get("webhooks_page"))
-        tenants_total = db.count_tenants(nicky_user_uuid=owner_uuid)
+        tenants_total = db.count_tenants(**tenant_scope.tenant_filters)
         orders_total = db.count_orders(**order_filters)
         webhooks_total = db.count_webhook_events(**webhook_filters)
         dashboard_tenants = db.list_tenants(
             limit=DASHBOARD_PAGE_SIZE,
             offset=page_offset(tenants_page_number, DASHBOARD_PAGE_SIZE),
-            nicky_user_uuid=owner_uuid,
+            **tenant_scope.tenant_filters,
         )
         orders = [
             row_to_dict(row)
@@ -167,7 +174,7 @@ def create_admin_ui_router(
         </section>
         {summary_grid(tenants, orders, webhooks)}
         <section class="mb-7 min-w-0">
-          <h2 class="mb-3 text-lg font-semibold text-slate-950">Core tenant mapping</h2>
+          <h2 class="mb-3 text-lg font-semibold text-slate-950">Customer connections</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {tenant_table(dashboard_tenants, user=user, settings=settings, framed=False)}
             {pagination_controls(tenants_page_number, DASHBOARD_PAGE_SIZE, tenants_total, "/overview", request.query_params, "tenants_page")}
@@ -176,7 +183,7 @@ def create_admin_ui_router(
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">Recent webhooks</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-            {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=owner_uuid is None)}
+            {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=not tenant_scope.scoped)}
             {webhook_table(webhooks)}
             {pagination_controls(webhooks_page_number, DASHBOARD_PAGE_SIZE, webhooks_total, "/overview", request.query_params, "webhooks_page")}
           </div>
@@ -184,13 +191,13 @@ def create_admin_ui_router(
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">Recent orders</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-            {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=owner_uuid is None)}
+            {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=not tenant_scope.scoped)}
             {orders_table(orders)}
             {pagination_controls(orders_page_number, DASHBOARD_PAGE_SIZE, orders_total, "/overview", request.query_params, "orders_page")}
           </div>
         </section>
         """
-        return html_response(render(request, "Dashboard", body, current_path="/admin-ui"))
+        return html_response(render(request, "Dashboard", body, current_path="/admin-ui", settings=settings))
 
     @router.get("/overview", response_class=HTMLResponse)
     @router.get("/overview/", response_class=HTMLResponse)
@@ -206,21 +213,21 @@ def create_admin_ui_router(
     async def tenants_page(
         request: Request, user: admin_auth.AdminUser = Depends(require_admin_web)
     ):
-        owner_uuid = scoped_owner_uuid(user, settings)
+        tenant_scope = scoped_tenant_scope(user, settings, db)
         filters = tenant_page_filters(request)
         page_number = page_query_value(request.query_params.get("page"))
-        total = db.count_tenants(**filters, nicky_user_uuid=owner_uuid)
+        total = db.count_tenants(**filters, **tenant_scope.tenant_filters)
         tenants = db.list_tenants(
             limit=DEFAULT_PAGE_SIZE,
             offset=page_offset(page_number, DEFAULT_PAGE_SIZE),
             **filters,
-            nicky_user_uuid=owner_uuid,
+            **tenant_scope.tenant_filters,
         )
         body = f"""
         <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 class="text-2xl font-semibold leading-8 text-slate-950">Core tenant mapping</h1>
-            <p class="mt-2 text-sm text-slate-500">Map each Ticket Tailor account to the Nicky account that receives payments.</p>
+            <h1 class="text-2xl font-semibold leading-8 text-slate-950">Customer connections</h1>
+            <p class="mt-2 text-sm text-slate-500">Manage each customer's Ticket Tailor connection, Nicky payment account, and webhook setup.</p>
           </div>
           {new_tenant_link(user, tenants, settings)}
         </section>
@@ -230,7 +237,7 @@ def create_admin_ui_router(
           {pagination_controls(page_number, DEFAULT_PAGE_SIZE, total, "/admin-ui/tenants", request.query_params, "page")}
         </div>
         """
-        return html_response(render(request, "Tenants", body, current_path="/admin-ui/tenants"))
+        return html_response(render(request, "Tenants", body, current_path="/admin-ui/tenants", settings=settings))
 
     @router.get("/admin-ui/tenants/new", response_class=HTMLResponse)
     async def new_tenant(
@@ -246,6 +253,7 @@ def create_admin_ui_router(
                 "New tenant",
                 tenant_form(tenant, is_new=True, settings=settings, user=user),
                 current_path="/admin-ui/tenants",
+                settings=settings,
             )
         )
 
@@ -270,6 +278,7 @@ def create_admin_ui_router(
                     message=request.query_params.get("message"),
                 ),
                 current_path="/admin-ui/tenants",
+                settings=settings,
             )
         )
 
@@ -281,44 +290,80 @@ def create_admin_ui_router(
             raise HTTPException(status_code=403, detail="Support access is read-only")
         form = await read_form(request)
         requested_tenant_id = form.get("tenant_id", "")
-        tenant_id = normalize_tenant_id(requested_tenant_id) if admin_auth.is_admin(user, settings) and requested_tenant_id else normalize_tenant_id(admin_auth.nicky_user_uuid(user))
-        existing = db.get_tenant(tenant_id)
-        base = existing or tenant_from_settings(settings, tenant_id)
-        api_key = form_secret(form, "nicky_api_key", base.nicky_api_key)
-        validation = await nicky_client.validate_api_key(api_key)
-        nicky_user_uuid = str(validation.get("nicky_user_uuid") or "")
-        nicky_user_short_id = str(validation.get("nicky_user_short_id") or "")
-        if not nicky_user_uuid:
-            raise HTTPException(status_code=400, detail="Nicky API key validation did not return a user UUID")
-        if not admin_auth.is_admin(user, settings) and nicky_user_uuid != admin_auth.nicky_user_uuid(user):
-            raise HTTPException(status_code=403, detail="Nicky API key belongs to another user")
-        if not admin_auth.is_admin(user, settings):
-            tenant_id = normalize_tenant_id(nicky_user_uuid)
+        normalized_requested_tenant_id = (
+            normalize_tenant_id(requested_tenant_id) if requested_tenant_id else None
+        )
+        existing = (
+            db.get_tenant(normalized_requested_tenant_id)
+            if normalized_requested_tenant_id
+            else None
+        )
+        base_for_secret = existing or tenant_from_settings(
+            settings, normalized_requested_tenant_id or "pending-tenant"
+        )
+        api_key = form_secret(form, "nicky_api_key", base_for_secret.nicky_api_key)
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Nicky API key is required")
+        try:
+            validation = await nicky_client.validate_api_key(api_key)
+        except NickyApiError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid Nicky API key: {exc}") from exc
+        raw_nicky_user_uuid = str(validation.get("nicky_user_uuid") or "")
+        raw_nicky_user_short_id = str(validation.get("nicky_user_short_id") or "")
+        raw_nicky_user_email = str(validation.get("nicky_user_email") or "")
+        auth0_identifier = admin_auth.user_identifier(user)
+        manual_nicky_user_email = form.get("nicky_user_email", "").strip()
+        if admin_auth.is_admin(user, settings):
+            nicky_user_email = raw_nicky_user_email or manual_nicky_user_email
+        else:
+            nicky_user_email = raw_nicky_user_email or auth0_identifier
+        if not nicky_user_email:
+            raise HTTPException(status_code=400, detail="Nicky email is required")
+        tenant_id = (
+            normalized_requested_tenant_id
+            if normalized_requested_tenant_id and existing
+            else normalize_tenant_id(raw_nicky_user_uuid) if raw_nicky_user_uuid else generate_tenant_id(db)
+        )
+        base = existing or db.get_tenant(tenant_id) or tenant_from_settings(settings, tenant_id)
+        if (
+            not admin_auth.is_admin(user, settings)
+            and base.owner_auth_subject
+            and base.owner_auth_subject != user.subject
+        ):
+            raise HTTPException(status_code=403, detail="Tenant outside user scope")
+        asset_id = form.get("nicky_default_blockchain_asset_id", "")
+        available_asset_ids = {str(asset.get("id") or "") for asset in validation.get("assets") or []}
+        if not asset_id:
+            raise HTTPException(status_code=400, detail="Nicky asset is required")
+        if available_asset_ids and asset_id not in available_asset_ids:
+            raise HTTPException(status_code=400, detail="Selected asset is not available for this Nicky API key")
+        ticket_tailor_api_key = form_secret(
+            form, "ticket_tailor_api_key", base.ticket_tailor_api_key
+        )
+        ensure_unique_active_api_keys(
+            db,
+            nicky_api_key=api_key,
+            ticket_tailor_api_key=ticket_tailor_api_key,
+            exclude_tenant_id=tenant_id,
+        )
 
         tenant = replace(
             base,
             tenant_id=tenant_id,
-            name=form.get("name") or nicky_user_short_id or tenant_id,
+            name=form.get("name") or raw_nicky_user_short_id or nicky_user_email or tenant_id,
             active=True,
-            nicky_user_uuid=nicky_user_uuid,
-            nicky_user_short_id=nicky_user_short_id,
-            ticket_tailor_api_key=form_secret(
-                form, "ticket_tailor_api_key", base.ticket_tailor_api_key
-            ),
+            nicky_user_uuid=raw_nicky_user_uuid,
+            nicky_user_short_id=raw_nicky_user_short_id,
+            nicky_user_email=nicky_user_email,
+            ticket_tailor_api_key=ticket_tailor_api_key,
             ticket_tailor_webhook_signing_secret="",
-            ticket_tailor_offline_payment_keywords=NICKY_PAYMENT_KEYWORDS,
             nicky_api_key=api_key,
-            nicky_default_blockchain_asset_id=form.get(
-                "nicky_default_blockchain_asset_id", ""
-            ),
-            nicky_receiver_short_id=nicky_user_short_id,
+            nicky_default_blockchain_asset_id=asset_id,
+            nicky_receiver_short_id=raw_nicky_user_short_id,
             nicky_webhook_token=base.nicky_webhook_token or secrets.token_urlsafe(24),
             nicky_webhook_type=NICKY_WEBHOOK_TYPE,
-            auto_create_nicky_payment_request=True,
-            auto_confirm_ticket_tailor_payments=True,
             nicky_send_notification=True,
-            skip_nicky=False,
-            dry_run=False,
+            owner_auth_subject=base.owner_auth_subject if admin_auth.is_admin(user, settings) else user.subject,
         )
         db.upsert_tenant(tenant)
         await nicky_client.create_webhook(tenant, build_nicky_webhook_url(settings, tenant))
@@ -358,9 +403,10 @@ def create_admin_ui_router(
     async def delete_tenant(
         tenant_id: str, user: admin_auth.AdminUser = Depends(require_admin_web)
     ):
-        if not admin_auth.is_admin(user, settings):
-            raise HTTPException(status_code=403, detail="Admin role required")
+        if not can_write_tenants(user, settings):
+            raise HTTPException(status_code=403, detail="Support access is read-only")
         tenant = get_tenant_or_404(db, tenant_id)
+        require_tenant_visible(user, settings, tenant)
         db.deactivate_tenant(tenant.tenant_id)
         return RedirectResponse("/admin-ui/tenants", status_code=303)
 
@@ -369,9 +415,11 @@ def create_admin_ui_router(
         request: Request,
         user: admin_auth.AdminUser = Depends(require_admin_web),
     ):
-        owner_uuid = scoped_owner_uuid(user, settings)
-        tenants = db.list_tenants(nicky_user_uuid=owner_uuid)
-        order_filters = scoped_order_filters(orders_page_filters(request), owner_uuid)
+        tenant_scope = scoped_tenant_scope(user, settings, db)
+        tenants = db.list_tenants(**tenant_scope.tenant_filters)
+        order_filters = scoped_order_filters(
+            orders_page_filters(request), tenant_scope.order_tenant_id
+        )
         page_number = page_query_value(request.query_params.get("page"))
         total = db.count_orders(**order_filters)
         orders = [
@@ -390,12 +438,12 @@ def create_admin_ui_router(
           </div>
         </section>
         <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-          {orders_page_filters_form(order_filters, tenants, show_tenant_filter=owner_uuid is None)}
+          {orders_page_filters_form(order_filters, tenants, show_tenant_filter=not tenant_scope.scoped)}
           {orders_table(orders)}
           {pagination_controls(page_number, DEFAULT_PAGE_SIZE, total, "/admin-ui/orders", request.query_params, "page")}
         </div>
         """
-        return html_response(render(request, "Orders", body, current_path="/admin-ui/orders"))
+        return html_response(render(request, "Orders", body, current_path="/admin-ui/orders", settings=settings))
 
     @router.get("/admin-ui/orders/{ticket_tailor_order_id}", response_class=HTMLResponse)
     async def order_detail(
@@ -405,8 +453,8 @@ def create_admin_ui_router(
         user: admin_auth.AdminUser = Depends(require_admin_web),
     ):
         tenant = normalize_tenant_id(tenant_id)
-        owner_uuid = scoped_owner_uuid(user, settings)
-        if owner_uuid and tenant != owner_uuid:
+        tenant_scope = scoped_tenant_scope(user, settings, db)
+        if tenant_scope.scoped and tenant != tenant_scope.order_tenant_id:
             raise HTTPException(status_code=403, detail="Order outside user scope")
         row = db.get_order(tenant, ticket_tailor_order_id)
         if not row:
@@ -445,7 +493,7 @@ def create_admin_ui_router(
           <details><summary class="cursor-pointer text-sm font-semibold text-slate-950">Show payload</summary><pre class="mt-3 overflow-x-auto rounded-lg bg-zinc-950 p-4 text-xs text-slate-100">{e(json.dumps(order.get("raw_payload"), indent=2, ensure_ascii=False))}</pre></details>
         </section>
         """
-        return html_response(render(request, "Order detail", body, current_path="/admin-ui/orders"))
+        return html_response(render(request, "Order detail", body, current_path="/admin-ui/orders", settings=settings))
 
     @router.post("/admin-ui/orders/{ticket_tailor_order_id}/create-nicky-payment-request")
     async def create_payment_request(
@@ -504,8 +552,16 @@ def html_response(content: str) -> HTMLResponse:
     return HTMLResponse(content)
 
 
-def render(request: Request, title: str, body: str, *, current_path: str) -> str:
-    return page(title, body, current_path=current_path, user=admin_auth.get_session_user(request))
+def render(
+    request: Request, title: str, body: str, *, current_path: str, settings: Settings
+) -> str:
+    return page(
+        title,
+        body,
+        current_path=current_path,
+        user=admin_auth.get_session_user(request),
+        settings=settings,
+    )
 
 
 def page(
@@ -514,13 +570,15 @@ def page(
     *,
     current_path: str,
     user: admin_auth.AdminUser | None,
+    settings: Settings,
 ) -> str:
     user_block = ""
     if user:
+        profile_label = user_profile_label(user, settings)
         user_block = f"""
         <div class="flex flex-wrap items-center gap-3 text-sm">
           <span class="font-semibold text-slate-950">{e(user.name)}</span>
-          <small class="text-xs text-slate-400">{e(", ".join(user.roles) or user.auth_method)}</small>
+          <small class="text-xs text-slate-400">{e(profile_label)}</small>
           <a class="inline-flex h-9 items-center rounded-lg bg-slate-100 px-3 font-medium text-slate-950 hover:bg-slate-200" href="/admin-ui/logout">Log out</a>
         </div>
         """
@@ -530,7 +588,7 @@ def page(
             ("Dashboard", "/admin-ui"),
             ("Tenants", "/admin-ui/tenants"),
             ("Orders", "/admin-ui/orders"),
-            ("API docs", "/docs"),
+            ("API docs", f"{settings.api_base_path}/docs"),
         ]
     )
     return f"""<!doctype html>
@@ -566,16 +624,39 @@ def page(
 </html>"""
 
 
+def user_profile_label(user: admin_auth.AdminUser, settings: Settings) -> str:
+    if admin_auth.is_admin(user, settings):
+        return "Admin"
+    if admin_auth.is_support(user):
+        return "Support"
+    return "User"
+
+
 def nav_link(label: str, href: str, current_path: str) -> str:
     base = "inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold transition"
     active = "bg-black text-white" if href == current_path else "text-slate-950 hover:bg-slate-100"
     return f'<a class="{base} {active}" href="{href}">{e(label)}</a>'
 
 
-def scoped_owner_uuid(user: admin_auth.AdminUser, settings: Settings) -> str | None:
+def scoped_tenant_scope(
+    user: admin_auth.AdminUser, settings: Settings, db: Database
+) -> TenantScope:
     if admin_auth.is_privileged(user, settings):
-        return None
-    return admin_auth.nicky_user_uuid(user)
+        return TenantScope(tenant_filters={}, order_tenant_id=None, scoped=False)
+    owner_uuid = admin_auth.nicky_user_uuid_claim(user)
+    if owner_uuid:
+        return TenantScope(
+            tenant_filters={"nicky_user_uuid": owner_uuid},
+            order_tenant_id=owner_uuid,
+            scoped=True,
+        )
+    tenants = db.list_tenants(owner_auth_subject=user.subject, limit=1)
+    order_tenant_id = tenants[0].tenant_id if tenants else NO_TENANT_SCOPE
+    return TenantScope(
+        tenant_filters={"owner_auth_subject": user.subject},
+        order_tenant_id=order_tenant_id,
+        scoped=True,
+    )
 
 
 def can_write_tenants(user: admin_auth.AdminUser, settings: Settings) -> bool:
@@ -585,9 +666,47 @@ def can_write_tenants(user: admin_auth.AdminUser, settings: Settings) -> bool:
 def require_tenant_visible(
     user: admin_auth.AdminUser, settings: Settings, tenant: TenantConfig
 ) -> None:
-    owner_uuid = scoped_owner_uuid(user, settings)
+    if admin_auth.is_privileged(user, settings):
+        return
+    owner_uuid = admin_auth.nicky_user_uuid_claim(user)
     if owner_uuid and tenant.nicky_user_uuid != owner_uuid:
         raise HTTPException(status_code=403, detail="Tenant outside user scope")
+    if not owner_uuid and tenant.owner_auth_subject != user.subject:
+        raise HTTPException(status_code=403, detail="Tenant outside user scope")
+
+
+def generate_tenant_id(db: Database) -> str:
+    for _ in range(10):
+        tenant_id = normalize_tenant_id(f"tenant-{secrets.token_hex(8)}")
+        if not db.get_tenant(tenant_id):
+            return tenant_id
+    raise HTTPException(status_code=500, detail="Could not generate tenant id")
+
+
+def ensure_unique_active_api_keys(
+    db: Database,
+    *,
+    nicky_api_key: str,
+    ticket_tailor_api_key: str,
+    exclude_tenant_id: str | None = None,
+) -> None:
+    nicky_conflict = db.find_active_tenant_by_api_key(
+        "nicky_api_key",
+        nicky_api_key,
+        exclude_tenant_id=exclude_tenant_id,
+    )
+    if nicky_conflict:
+        raise HTTPException(status_code=409, detail="Nicky API key is already used by an active tenant")
+    ticket_tailor_conflict = db.find_active_tenant_by_api_key(
+        "ticket_tailor_api_key",
+        ticket_tailor_api_key,
+        exclude_tenant_id=exclude_tenant_id,
+    )
+    if ticket_tailor_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail="Ticket Tailor API key is already used by an active tenant",
+        )
 
 
 def scoped_order_filters(
@@ -611,8 +730,6 @@ def scoped_webhook_filters(
 def new_tenant_link(user: admin_auth.AdminUser, tenants: list[TenantConfig], settings: Settings) -> str:
     if not can_write_tenants(user, settings):
         return ""
-    if not admin_auth.is_admin(user, settings) and tenants:
-        return ""
     return '<a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/tenants/new">New tenant</a>'
 
 
@@ -628,11 +745,10 @@ def summary_grid(
     )
     failed_webhooks = sum(1 for webhook in webhooks if webhook.get("status") == "failed")
     return f"""
-    <section class="mb-7 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <section class="mb-7 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-3">
       {metric("Tenants", str(len(tenants)), f"{active_tenants} active")}
       {metric("Recent orders", str(len(orders)), f"{pending_orders} pending")}
       {metric("Recent webhooks", str(len(webhooks)), f"{failed_webhooks} failed")}
-      {metric("Mode", "Live", "fixed behavior")}
     </section>
     """
 
@@ -656,7 +772,7 @@ def tenant_table(
 ) -> str:
     rows = "".join(tenant_row(tenant, user=user, settings=settings) for tenant in tenants)
     if not rows:
-        rows = '<tr><td colspan="8" class="px-4 py-4 text-sm text-slate-400">No tenants configured yet.</td></tr>'
+        rows = '<tr><td colspan="9" class="px-4 py-4 text-sm text-slate-400">No tenants configured yet.</td></tr>'
     wrapper = (
         'class="min-w-0 overflow-x-auto rounded-xl border border-slate-100 bg-white shadow-nicky"'
         if framed
@@ -668,8 +784,7 @@ def tenant_table(
         <thead>
           <tr class="bg-slate-50 text-xs font-semibold text-slate-500">
             <th class="border-b border-slate-100 px-4 py-3">Tenant</th>
-            <th class="border-b border-slate-100 px-4 py-3">Nicky UUID</th>
-            <th class="border-b border-slate-100 px-4 py-3">Short ID</th>
+            <th class="border-b border-slate-100 px-4 py-3">Nicky email</th>
             <th class="border-b border-slate-100 px-4 py-3">Active</th>
             <th class="border-b border-slate-100 px-4 py-3">Ticket Tailor</th>
             <th class="border-b border-slate-100 px-4 py-3">Nicky</th>
@@ -693,8 +808,7 @@ def tenant_row(tenant: TenantConfig, *, user: admin_auth.AdminUser, settings: Se
     return f"""
     <tr class="even:bg-[#f8f8f9] hover:bg-slate-50">
       <td class="border-b border-slate-100 px-4 py-3 align-top"><strong class="font-semibold text-slate-950">{e(tenant.tenant_id)}</strong><br><small class="text-sm text-slate-400">{e(tenant.name)}</small></td>
-      <td class="border-b border-slate-100 px-4 py-3 align-top">{e(tenant.nicky_user_uuid or "-")}</td>
-      <td class="border-b border-slate-100 px-4 py-3 align-top">{e(tenant.nicky_user_short_id or "-")}</td>
+      <td class="border-b border-slate-100 px-4 py-3 align-top">{e(tenant.nicky_user_email or "-")}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{badge("Active" if tenant.active else "Inactive", tenant.active)}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{badge("Configured" if safe["ticket_tailor_configured"] else "Missing", safe["ticket_tailor_configured"])}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{badge("Configured" if safe["nicky_configured"] else "Missing", safe["nicky_configured"])}</td>
@@ -715,89 +829,244 @@ def tenant_form(
     saved: bool = False,
     message: str | None = None,
 ) -> str:
-    tt_webhook = f"{settings.app_base_url}/webhooks/ticket-tailor/{tenant.tenant_id}"
+    tt_webhook = external_api_url(settings, f"/webhooks/ticket-tailor/{tenant.tenant_id}")
     notice = ""
     if saved:
         notice = '<p class="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">Tenant saved.</p>'
     elif message:
         notice = f'<p class="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">{e(message.replace("_", " ").capitalize())}.</p>'
     delete_action = ""
-    if not is_new and admin_auth.is_admin(user, settings):
+    if not is_new and can_write_tenants(user, settings):
         delete_action = f"""
         <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/delete">
           <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">Deactivate tenant</button>
         </form>
         """
+    hidden_tenant_id = (
+        f'<input type="hidden" name="tenant_id" value="{e(tenant.tenant_id)}">'
+        if not is_new
+        else ""
+    )
     asset_option = (
         f'<option value="{e(tenant.nicky_default_blockchain_asset_id)}" selected>{e(tenant.nicky_default_blockchain_asset_id)}</option>'
         if tenant.nicky_default_blockchain_asset_id
         else '<option value="">Validate Nicky API key first</option>'
     )
-    tenant_id_field = (
-        text_input("Tenant UUID", "tenant_id", value=tenant.tenant_id, readonly=not is_new or not admin_auth.is_admin(user, settings), required=admin_auth.is_admin(user, settings))
-        if admin_auth.is_admin(user, settings)
-        else ""
+    is_admin_user = admin_auth.is_admin(user, settings)
+    auth0_identifier = admin_auth.user_identifier(user)
+    nicky_email_value = (
+        ""
+        if is_new and is_admin_user
+        else auth0_identifier
+        if is_new
+        else tenant.nicky_user_email or ("" if is_admin_user else auth0_identifier)
     )
+    nicky_identity_readonly = "" if is_admin_user else " readonly"
+    nicky_identity_class = (
+        "mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black"
+        if is_admin_user
+        else "mt-2 h-11 w-full rounded-lg border border-slate-100 bg-slate-50 px-3 text-sm text-slate-500"
+    )
+    nicky_api_placeholder = "Paste Nicky API key" if is_new else "Leave blank to keep existing"
+    ticket_tailor_placeholder = (
+        "Paste Ticket Tailor API key" if is_new else "Leave blank to keep existing"
+    )
+    webhook_block = ""
+    tenant_uuid_block = ""
+    if not is_new:
+        tenant_uuid_block = f"""
+          {text_input("Tenant UUID", "", value=tenant.tenant_id, readonly=True)}
+        """
+        webhook_block = f"""
+        <div class="mt-5 border-t border-slate-100 pt-5">
+          <h3 class="text-sm font-semibold text-slate-950">Ticket Tailor webhook</h3>
+          <p class="mt-1 text-sm leading-6 text-slate-500">Copy this microservice webhook URL and configure it in Ticket Tailor under Settings &gt; API &gt; WebHook.</p>
+          <div class="mt-3 flex min-w-0 flex-col gap-3 sm:flex-row">
+            <input id="ticket-tailor-webhook-url" class="h-11 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none" type="text" value="{e(tt_webhook)}" readonly>
+            <button id="copy-ticket-tailor-webhook-url" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" type="button">Copy</button>
+          </div>
+          <p id="ticket-tailor-webhook-copy-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+        </div>
+        """
+    save_label = "Create tenant" if is_new else "Save changes"
+    page_title = "New tenant" if is_new else f"Tenant {e(tenant.name or tenant.tenant_id)}"
+    back_label = "Back to tenants"
     return f"""
     <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div>
-        <h1 class="text-2xl font-semibold leading-8 text-slate-950">{"New tenant" if is_new else f"Tenant {e(tenant.tenant_id)}"}</h1>
-        <p class="mt-2 text-sm text-slate-500">Live integration configuration for one Nicky user.</p>
+        <h1 class="text-2xl font-semibold leading-8 text-slate-950">{page_title}</h1>
       </div>
       <div class="flex flex-wrap gap-3">
         {delete_action}
-        <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">Back to tenants</a>
+        <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{back_label}</a>
+        <button id="save-tenant-button" class="inline-flex h-10 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" form="tenant-form" disabled>{save_label}</button>
       </div>
     </section>
     {notice}
-    <form method="post" action="/admin-ui/tenants/save" class="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-2">
-      <section class="min-w-0 rounded-xl border border-slate-100 bg-white p-4 shadow-nicky">
-        <h2 class="mb-4 text-lg font-semibold text-slate-950">Identity</h2>
-        {tenant_id_field}
-        {text_input("Name", "name", value=tenant.name)}
-        {text_input("Nicky user UUID", "", value=tenant.nicky_user_uuid or "-", readonly=True)}
-        {text_input("Nicky short ID", "", value=tenant.nicky_user_short_id or "-", readonly=True)}
-      </section>
-      <section class="min-w-0 rounded-xl border border-slate-100 bg-white p-4 shadow-nicky">
-        <h2 class="mb-4 text-lg font-semibold text-slate-950">Nicky</h2>
-        <label class="mb-4 block min-w-0 text-sm font-semibold text-slate-950">
-          API key
-          <input id="nicky-api-key" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black disabled:bg-slate-50" name="nicky_api_key" type="password" placeholder="Leave blank to keep existing">
-        </label>
-        <div class="mb-4 flex flex-wrap items-center gap-3">
-          <button id="validate-nicky-key" class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" type="button">Validate</button>
-          <span id="nicky-validation-status" class="text-sm text-slate-500"></span>
+    <form id="tenant-form" method="post" action="/admin-ui/tenants/save" class="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-5">
+      {hidden_tenant_id}
+      <section class="min-w-0 rounded-lg border border-slate-100 bg-white p-5 shadow-nicky">
+        <div class="min-w-0">
+          <h2 class="mb-5 text-lg font-semibold text-slate-950">Tenant</h2>
+          <div class="space-y-5">
+            {text_input("Name", "name", value=tenant.name if not is_new else "")}
+            {tenant_uuid_block}
+          </div>
         </div>
-        <label class="mb-4 block min-w-0 text-sm font-semibold text-slate-950">
-          Asset
-          <select id="nicky-asset" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="nicky_default_blockchain_asset_id" required>{asset_option}</select>
-        </label>
+        <div class="mt-6 min-w-0 border-t border-slate-100 pt-6">
+          <h2 class="mb-5 text-lg font-semibold text-slate-950">Nicky</h2>
+          <label class="mb-4 block min-w-0 text-sm font-semibold text-slate-950">
+            API key
+            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
+                <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none disabled:bg-slate-50" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="off">
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="Show Nicky API key" title="Show API key">Show</button>
+              </div>
+              <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">Validate</button>
+            </div>
+          </label>
+          <p id="nicky-validation-status" class="mb-5 min-h-5 text-sm text-slate-500"></p>
+          <div class="mb-5 min-w-0">
+            <label class="block min-w-0 text-sm font-semibold text-slate-950">
+              Nicky email
+              <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}"{nicky_identity_readonly}>
+            </label>
+          </div>
+          <label class="block min-w-0 text-sm font-semibold text-slate-950">
+            Asset
+            <select id="nicky-asset" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="nicky_default_blockchain_asset_id" required>{asset_option}</select>
+          </label>
+        </div>
+        <div class="mt-6 min-w-0 border-t border-slate-100 pt-6">
+          <h2 class="mb-5 text-lg font-semibold text-slate-950">Ticket Tailor</h2>
+          <label class="block min-w-0 text-sm font-semibold text-slate-950">
+            API key
+            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
+                <input id="ticket-tailor-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none disabled:bg-slate-50" name="ticket_tailor_api_key" type="password" placeholder="{e(ticket_tailor_placeholder)}" autocomplete="off">
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="ticket-tailor-api-key" aria-label="Show Ticket Tailor API key" title="Show API key">Show</button>
+              </div>
+              <button id="validate-ticket-tailor-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">Validate</button>
+            </div>
+          </label>
+          <p id="ticket-tailor-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+          {webhook_block}
+        </div>
       </section>
-      <section class="min-w-0 rounded-xl border border-slate-100 bg-white p-4 shadow-nicky">
-        <h2 class="mb-4 text-lg font-semibold text-slate-950">Ticket Tailor</h2>
-        {text_input("API key", "ticket_tailor_api_key", input_type="password", placeholder="Leave blank to keep existing")}
-        {text_input("Offline payment name", "", value="Nicky Payment", readonly=True)}
-        {text_input("Ticket Tailor webhook", "", value=tt_webhook, readonly=True)}
-      </section>
-      <div class="xl:col-span-2 flex justify-end">
-        <button class="inline-flex h-11 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800" type="submit">Save tenant</button>
-      </div>
     </form>
     <script>
-      const validateButton = document.getElementById("validate-nicky-key");
-      const apiKeyInput = document.getElementById("nicky-api-key");
-      const statusEl = document.getElementById("nicky-validation-status");
+      const tenantForm = document.querySelector('form[action="/admin-ui/tenants/save"]');
+      const nameInput = document.querySelector('input[name="name"]');
+      const saveButton = document.getElementById("save-tenant-button");
+      const nickyValidateButton = document.getElementById("validate-nicky-key");
+      const ticketTailorValidateButton = document.getElementById("validate-ticket-tailor-key");
+      const nickyApiKeyInput = document.getElementById("nicky-api-key");
+      const ticketTailorApiKeyInput = document.getElementById("ticket-tailor-api-key");
+      const nickyStatusEl = document.getElementById("nicky-validation-status");
+      const ticketTailorStatusEl = document.getElementById("ticket-tailor-validation-status");
+      const webhookUrlInput = document.getElementById("ticket-tailor-webhook-url");
+      const copyWebhookButton = document.getElementById("copy-ticket-tailor-webhook-url");
+      const webhookCopyStatusEl = document.getElementById("ticket-tailor-webhook-copy-status");
       const assetSelect = document.getElementById("nicky-asset");
-      validateButton?.addEventListener("click", async () => {{
-        const apiKey = apiKeyInput.value;
-        statusEl.textContent = "Validating...";
+      const nickyEmailInput = document.getElementById("nicky-email");
+      const isAdminUser = {str(is_admin_user).lower()};
+      const auth0Identifier = {json.dumps(auth0_identifier)};
+
+      const validationState = {{
+        nicky: {{ valid: {str(not is_new and bool(tenant.nicky_api_key)).lower()}, key: "" }},
+        ticketTailor: {{ valid: {str(not is_new and bool(tenant.ticket_tailor_api_key)).lower()}, key: "" }}
+      }};
+
+      function setStatus(element, message, state) {{
+        element.textContent = message;
+        element.className = "mt-2 min-h-5 text-sm " + (
+          state === "ok" ? "text-emerald-700" : state === "error" ? "text-rose-700" : "text-slate-500"
+        );
+      }}
+
+      function formReady() {{
+        const hasName = Boolean(nameInput?.value.trim());
+        const hasNickyKey = Boolean(nickyApiKeyInput?.value.trim()) || validationState.nicky.valid;
+        const hasTicketTailorKey = Boolean(ticketTailorApiKeyInput?.value.trim()) || validationState.ticketTailor.valid;
+        const hasAsset = Boolean(assetSelect?.value);
+        const hasNickyIdentity = Boolean(nickyEmailInput?.value.trim());
+        return hasName && hasNickyKey && hasTicketTailorKey && hasAsset && hasNickyIdentity && validationState.nicky.valid && validationState.ticketTailor.valid;
+      }}
+
+      function refreshSubmitState() {{
+        if (saveButton) saveButton.disabled = !formReady();
+      }}
+
+      async function parseResponse(response) {{
+        const responseText = await response.text();
         try {{
-          const response = await fetch("/admin/nicky/validate-api-key", {{
+          return responseText ? JSON.parse(responseText) : {{}};
+        }} catch (_) {{
+          return {{ detail: responseText || "Unexpected non-JSON response" }};
+        }}
+      }}
+
+      document.querySelectorAll("[data-toggle-secret]").forEach((button) => {{
+        button.addEventListener("click", () => {{
+          const input = document.getElementById(button.dataset.toggleSecret);
+          if (!input) return;
+          const showing = input.type === "text";
+          input.type = showing ? "password" : "text";
+          button.textContent = showing ? "Show" : "Hide";
+          button.setAttribute("aria-label", `${{showing ? "Show" : "Hide"}} API key`);
+        }});
+      }});
+
+      copyWebhookButton?.addEventListener("click", async () => {{
+        const webhookUrl = webhookUrlInput?.value || "";
+        if (!webhookUrl) return;
+        try {{
+          await navigator.clipboard.writeText(webhookUrl);
+          setStatus(webhookCopyStatusEl, "Copied.", "ok");
+        }} catch (_) {{
+          webhookUrlInput?.select();
+          document.execCommand("copy");
+          setStatus(webhookCopyStatusEl, "Copied.", "ok");
+        }}
+      }});
+
+      nickyApiKeyInput?.addEventListener("input", () => {{
+        validationState.nicky.valid = false;
+        validationState.nicky.key = "";
+        setStatus(nickyStatusEl, "", "idle");
+        nickyEmailInput.value = isAdminUser ? "" : auth0Identifier;
+        refreshSubmitState();
+      }});
+
+      nickyEmailInput?.addEventListener("input", refreshSubmitState);
+
+      ticketTailorApiKeyInput?.addEventListener("input", () => {{
+        validationState.ticketTailor.valid = false;
+        validationState.ticketTailor.key = "";
+        setStatus(ticketTailorStatusEl, "", "idle");
+        refreshSubmitState();
+      }});
+
+      nameInput?.addEventListener("input", refreshSubmitState);
+      assetSelect?.addEventListener("change", refreshSubmitState);
+
+      nickyValidateButton?.addEventListener("click", async () => {{
+        const apiKey = nickyApiKeyInput.value.trim();
+        if (!apiKey) {{
+          validationState.nicky.valid = false;
+          setStatus(nickyStatusEl, "Paste a Nicky API key first.", "error");
+          refreshSubmitState();
+          return;
+        }}
+        nickyValidateButton.disabled = true;
+        setStatus(nickyStatusEl, "Validating...", "idle");
+        try {{
+          const response = await fetch("{e(settings.admin_api_base_path)}/admin/nicky/validate-api-key", {{
             method: "POST",
             headers: {{ "Content-Type": "application/json" }},
             body: JSON.stringify({{ nicky_api_key: apiKey }})
           }});
-          const payload = await response.json();
+          const payload = await parseResponse(response);
           if (!response.ok) throw new Error(payload.detail || "Validation failed");
           assetSelect.innerHTML = "";
           for (const asset of payload.assets || []) {{
@@ -806,11 +1075,56 @@ def tenant_form(
             option.textContent = asset.name ? `${{asset.name}} (${{asset.id}})` : asset.id;
             assetSelect.appendChild(option);
           }}
-          statusEl.textContent = payload.nicky_user_short_id || payload.nicky_user_uuid || "Validated";
+          nickyEmailInput.value = payload.nicky_user_email || (isAdminUser ? "" : auth0Identifier);
+          validationState.nicky.valid = true;
+          validationState.nicky.key = apiKey;
+          setStatus(nickyStatusEl, "Nicky API key validated.", "ok");
         }} catch (error) {{
-          statusEl.textContent = error.message;
+          validationState.nicky.valid = false;
+          setStatus(nickyStatusEl, error.message, "error");
+        }} finally {{
+          nickyValidateButton.disabled = false;
+          refreshSubmitState();
         }}
       }});
+
+      ticketTailorValidateButton?.addEventListener("click", async () => {{
+        const apiKey = ticketTailorApiKeyInput.value.trim();
+        if (!apiKey) {{
+          validationState.ticketTailor.valid = false;
+          setStatus(ticketTailorStatusEl, "Paste a Ticket Tailor API key first.", "error");
+          refreshSubmitState();
+          return;
+        }}
+        ticketTailorValidateButton.disabled = true;
+        setStatus(ticketTailorStatusEl, "Validating...", "idle");
+        try {{
+          const response = await fetch("{e(settings.admin_api_base_path)}/admin/ticket-tailor/validate-api-key", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ ticket_tailor_api_key: apiKey }})
+          }});
+          const payload = await parseResponse(response);
+          if (!response.ok) throw new Error(payload.detail || "Validation failed");
+          validationState.ticketTailor.valid = true;
+          validationState.ticketTailor.key = apiKey;
+          setStatus(ticketTailorStatusEl, "Ticket Tailor API key validated.", "ok");
+        }} catch (error) {{
+          validationState.ticketTailor.valid = false;
+          setStatus(ticketTailorStatusEl, error.message, "error");
+        }} finally {{
+          ticketTailorValidateButton.disabled = false;
+          refreshSubmitState();
+        }}
+      }});
+
+      tenantForm?.addEventListener("submit", (event) => {{
+        refreshSubmitState();
+        if (!formReady()) {{
+          event.preventDefault();
+        }}
+      }});
+      refreshSubmitState();
     </script>
     """
 
@@ -1393,7 +1707,7 @@ def link_or_text(value: Any) -> str:
 
 
 def build_nicky_webhook_url(settings: Settings, tenant: TenantConfig) -> str:
-    url = f"{settings.app_base_url}/webhooks/nicky/{tenant.tenant_id}"
+    url = external_api_url(settings, f"/webhooks/nicky/{tenant.tenant_id}")
     if tenant.nicky_webhook_token:
         url = f"{url}?token={urllib.parse.quote(tenant.nicky_webhook_token)}"
     return url

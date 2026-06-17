@@ -1,7 +1,7 @@
 import time
 
 from app import admin_auth
-from app.config import Settings
+from app.config import Settings, external_api_url
 
 
 def test_extract_roles_from_auth0_array_and_namespaced_claims() -> None:
@@ -24,6 +24,21 @@ def test_allowed_roles_are_case_insensitive() -> None:
 def test_allowed_roles_wildcard_allows_authenticated_user() -> None:
     assert admin_auth.has_allowed_role([], ["*"]) is True
     assert admin_auth.has_allowed_role(["Viewer"], ["*"]) is True
+
+
+def test_wildcard_allowed_roles_does_not_make_user_admin() -> None:
+    settings = Settings(admin_allowed_roles=["*"])
+    user = admin_auth.AdminUser(
+        subject="auth0|user",
+        name="User",
+        email="user@example.com",
+        roles=[],
+        claims={"sub": "auth0|user"},
+        auth_method="auth0",
+    )
+
+    assert admin_auth.is_admin(user, settings) is False
+    assert admin_auth.is_privileged(user, settings) is False
 
 
 def test_admin_allowed_roles_define_admin_profile() -> None:
@@ -117,3 +132,15 @@ def test_safe_return_to_rejects_external_urls() -> None:
     )
     assert admin_auth.safe_return_to(settings, "https://evil.example.com") == "/admin-ui"
     assert admin_auth.safe_return_to(settings, "//evil.example.com") == "/admin-ui"
+
+
+def test_external_api_url_uses_configured_api_base_path() -> None:
+    settings = Settings(
+        app_base_url="https://nicky-ticket-taylor.vercel.app",
+        api_base_path="/api",
+    )
+
+    assert (
+        external_api_url(settings, "/webhooks/nicky/tenant-1")
+        == "https://nicky-ticket-taylor.vercel.app/api/webhooks/nicky/tenant-1"
+    )

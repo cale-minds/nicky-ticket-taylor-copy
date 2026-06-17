@@ -8,19 +8,20 @@ from dataclasses import replace
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import admin_auth
 from app.admin_ui import create_admin_ui_router
-from app.config import Settings, get_settings
+from app.config import Settings, external_api_url, get_settings
 from app.db import Database
-from app.nicky import NickyClient
+from app.nicky import NickyApiError, NickyClient
 from app.security import SignatureError, verify_ticket_tailor_signature
 from app.service import IntegrationService, row_to_dict
 from app.tenants import (
-    NICKY_PAYMENT_KEYWORDS,
     NICKY_WEBHOOK_TYPE,
     TenantConfig,
     normalize_tenant_id,
@@ -59,11 +60,16 @@ class TenantUpsertRequest(BaseModel):
     active: bool | None = None
     ticket_tailor_api_key: str | None = None
     nicky_api_key: str | None = None
+    nicky_user_email: str | None = None
     nicky_default_blockchain_asset_id: str | None = None
 
 
 class NickyApiKeyValidationRequest(BaseModel):
     nicky_api_key: str
+
+
+class TicketTailorApiKeyValidationRequest(BaseModel):
+    ticket_tailor_api_key: str
 
 
 @asynccontextmanager
@@ -87,6 +93,9 @@ app = FastAPI(
     title="Nicky Ticket Tailor Integration",
     version="0.2.0",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 app.add_middleware(
     SessionMiddleware,
@@ -97,6 +106,23 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def api_base_path_middleware(request: Request, call_next):
+    api_base_path = settings.api_base_path
+    if api_base_path and (
+        request.scope["path"] == api_base_path
+        or request.scope["path"].startswith(f"{api_base_path}/")
+    ):
+        stripped_path = request.scope["path"][len(api_base_path) :] or "/"
+        if stripped_path == "/":
+            stripped_path = "/health"
+        elif stripped_path.startswith(("/admin-ui", "/overview", "/authentication/login-callback")):
+            stripped_path = "/__not_found__"
+        request.scope["path"] = stripped_path
+        request.scope["root_path"] = request.scope.get("root_path", "") + api_base_path
+    return await call_next(request)
+
+
 def model_data(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(exclude_unset=True)
@@ -105,13 +131,11 @@ def model_data(model: BaseModel) -> dict[str, Any]:
 
 def require_admin(
     request: Request,
-    x_admin_token: str | None = Header(default=None),
     authorization: str | None = Header(default=None),
 ) -> admin_auth.AdminUser | None:
     user = admin_auth.authenticate_admin_request(
         settings,
         request,
-        x_admin_token=x_admin_token,
         authorization=authorization,
     )
     if user:
@@ -133,16 +157,34 @@ def require_writer(user: admin_auth.AdminUser) -> None:
 def scoped_nicky_user_uuid(user: admin_auth.AdminUser) -> str | None:
     if admin_auth.is_privileged(user, settings):
         return None
-    return admin_auth.nicky_user_uuid(user)
+    return admin_auth.nicky_user_uuid_claim(user)
+
+
+def scoped_owner_auth_subject(user: admin_auth.AdminUser) -> str | None:
+    if admin_auth.is_privileged(user, settings):
+        return None
+    if admin_auth.nicky_user_uuid_claim(user):
+        return None
+    return user.subject
 
 
 def scoped_tenant_id(user: admin_auth.AdminUser, requested: str | None = None) -> str | None:
     owner_uuid = scoped_nicky_user_uuid(user)
-    if not owner_uuid:
+    if admin_auth.is_privileged(user, settings):
         return requested
-    if requested and requested != owner_uuid:
+    if owner_uuid:
+        if requested and requested != owner_uuid:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant outside user scope")
+        return owner_uuid
+    if requested:
+        tenant = db.get_tenant(requested)
+        if tenant and tenant.owner_auth_subject == user.subject:
+            return requested
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant outside user scope")
-    return owner_uuid
+    tenants = db.list_tenants(owner_auth_subject=user.subject, limit=1)
+    if tenants:
+        return tenants[0].tenant_id
+    return "__nicky_no_tenant_scope__"
 
 
 app.include_router(
@@ -170,6 +212,39 @@ def get_tenant_or_404(tenant_id: str, *, require_active: bool = False) -> Tenant
     return tenant
 
 
+def generate_tenant_id() -> str:
+    for _ in range(10):
+        tenant_id = normalize_tenant_id(f"tenant-{secrets.token_hex(8)}")
+        if not db.get_tenant(tenant_id):
+            return tenant_id
+    raise HTTPException(status_code=500, detail="Could not generate tenant id")
+
+
+def ensure_unique_active_api_keys(
+    *,
+    nicky_api_key: str,
+    ticket_tailor_api_key: str,
+    exclude_tenant_id: str | None = None,
+) -> None:
+    nicky_conflict = db.find_active_tenant_by_api_key(
+        "nicky_api_key",
+        nicky_api_key,
+        exclude_tenant_id=exclude_tenant_id,
+    )
+    if nicky_conflict:
+        raise HTTPException(status_code=409, detail="Nicky API key is already used by an active tenant")
+    ticket_tailor_conflict = db.find_active_tenant_by_api_key(
+        "ticket_tailor_api_key",
+        ticket_tailor_api_key,
+        exclude_tenant_id=exclude_tenant_id,
+    )
+    if ticket_tailor_conflict:
+        raise HTTPException(
+            status_code=409,
+            detail="Ticket Tailor API key is already used by an active tenant",
+        )
+
+
 async def build_tenant_config(
     tenant_id: str | None,
     payload: TenantUpsertRequest,
@@ -184,55 +259,73 @@ async def build_tenant_config(
 
     try:
         nicky_validation = await nicky_client.validate_api_key(api_key)
-    except Exception as exc:
+    except NickyApiError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid Nicky API key: {exc}") from exc
 
-    nicky_user_uuid = str(nicky_validation.get("nicky_user_uuid") or "").strip()
-    nicky_user_short_id = str(nicky_validation.get("nicky_user_short_id") or "").strip()
-    if not nicky_user_uuid:
-        raise HTTPException(status_code=400, detail="Nicky API key validation did not return a user UUID")
-
-    if not admin_auth.is_admin(user, settings) and nicky_user_uuid != admin_auth.nicky_user_uuid(user):
-        raise HTTPException(status_code=403, detail="Nicky API key belongs to another user")
-
-    resolved_tenant_id = requested_tenant_id if admin_auth.is_admin(user, settings) and requested_tenant_id else nicky_user_uuid
+    raw_nicky_user_uuid = str(nicky_validation.get("nicky_user_uuid") or "").strip()
+    raw_nicky_user_short_id = str(nicky_validation.get("nicky_user_short_id") or "").strip()
+    raw_nicky_user_email = str(nicky_validation.get("nicky_user_email") or "").strip()
+    auth0_identifier = admin_auth.user_identifier(user)
+    updates = model_data(payload)
+    updates.pop("tenant_id", None)
+    updates = {key: value for key, value in updates.items() if value is not None}
+    nicky_user_email = (
+        raw_nicky_user_email
+        or str(updates.get("nicky_user_email") or "").strip()
+        or ("" if admin_auth.is_admin(user, settings) else auth0_identifier)
+    )
+    if not nicky_user_email:
+        raise HTTPException(status_code=400, detail="Nicky email is required")
+    resolved_tenant_id = (
+        requested_tenant_id
+        if requested_tenant_id
+        else raw_nicky_user_uuid
+        if raw_nicky_user_uuid
+        else generate_tenant_id()
+    )
     try:
         normalized_tenant_id = normalize_tenant_id(resolved_tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     base = existing or db.get_tenant(normalized_tenant_id) or tenant_from_settings(settings, normalized_tenant_id)
-    updates = model_data(payload)
-    updates.pop("tenant_id", None)
-    updates = {key: value for key, value in updates.items() if value is not None}
+    if (
+        not admin_auth.is_admin(user, settings)
+        and base.owner_auth_subject
+        and base.owner_auth_subject != user.subject
+    ):
+        raise HTTPException(status_code=403, detail="Tenant outside user scope")
     asset_id = str(updates.get("nicky_default_blockchain_asset_id") or base.nicky_default_blockchain_asset_id or "")
     available_asset_ids = {str(asset.get("id") or "") for asset in nicky_validation.get("assets") or []}
     if not asset_id:
         raise HTTPException(status_code=400, detail="Nicky asset is required")
     if available_asset_ids and asset_id not in available_asset_ids:
         raise HTTPException(status_code=400, detail="Selected asset is not available for this Nicky API key")
+    ticket_tailor_api_key = str(updates.get("ticket_tailor_api_key") or base.ticket_tailor_api_key)
+    ensure_unique_active_api_keys(
+        nicky_api_key=api_key,
+        ticket_tailor_api_key=ticket_tailor_api_key,
+        exclude_tenant_id=normalized_tenant_id,
+    )
 
     webhook_token = base.nicky_webhook_token or secrets.token_urlsafe(24)
     return replace(
         base,
         tenant_id=normalized_tenant_id,
-        name=str(updates.get("name") or nicky_user_short_id or normalized_tenant_id),
+        name=str(updates.get("name") or raw_nicky_user_short_id or nicky_user_email or normalized_tenant_id),
         active=bool(updates.get("active", True)),
-        nicky_user_uuid=nicky_user_uuid,
-        nicky_user_short_id=nicky_user_short_id,
-        ticket_tailor_api_key=str(updates.get("ticket_tailor_api_key") or base.ticket_tailor_api_key),
+        nicky_user_uuid=raw_nicky_user_uuid,
+        nicky_user_short_id=raw_nicky_user_short_id,
+        nicky_user_email=nicky_user_email,
+        ticket_tailor_api_key=ticket_tailor_api_key,
         ticket_tailor_webhook_signing_secret="",
-        ticket_tailor_offline_payment_keywords=NICKY_PAYMENT_KEYWORDS,
         nicky_api_key=api_key,
         nicky_default_blockchain_asset_id=asset_id,
-        nicky_receiver_short_id=nicky_user_short_id,
+        nicky_receiver_short_id=raw_nicky_user_short_id,
         nicky_webhook_token=webhook_token,
         nicky_webhook_type=NICKY_WEBHOOK_TYPE,
-        auto_create_nicky_payment_request=True,
-        auto_confirm_ticket_tailor_payments=True,
         nicky_send_notification=True,
-        skip_nicky=False,
-        dry_run=False,
+        owner_auth_subject=base.owner_auth_subject if admin_auth.is_admin(user, settings) else user.subject,
     )
 
 
@@ -252,11 +345,28 @@ def require_nicky_token(
 
 
 def nicky_webhook_url(tenant: TenantConfig, url: str | None = None) -> str:
-    webhook_url = url or f"{settings.app_base_url}/webhooks/nicky/{tenant.tenant_id}"
+    webhook_url = url or external_api_url(settings, f"/webhooks/nicky/{tenant.tenant_id}")
     if tenant.nicky_webhook_token and "token=" not in webhook_url:
         separator = "&" if "?" in webhook_url else "?"
         webhook_url = f"{webhook_url}{separator}token={tenant.nicky_webhook_token}"
     return webhook_url
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs(request: Request):
+    if request.scope.get("root_path") != settings.api_base_path:
+        raise HTTPException(status_code=404, detail="Not found")
+    return get_swagger_ui_html(
+        openapi_url=f"{settings.api_base_path}/openapi.json",
+        title=f"{app.title} - Swagger UI",
+    )
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(request: Request):
+    if request.scope.get("root_path") != settings.api_base_path:
+        raise HTTPException(status_code=404, detail="Not found")
+    return get_openapi(title=app.title, version=app.version, routes=app.routes)
 
 
 async def parse_json_body(request: Request) -> tuple[bytes, dict[str, Any]]:
@@ -460,7 +570,10 @@ async def get_order(
 async def admin_list_tenants(user: admin_auth.AdminUser = Depends(require_admin)) -> list[dict[str, Any]]:
     return [
         tenant_to_safe_dict(tenant)
-        for tenant in db.list_tenants(nicky_user_uuid=scoped_nicky_user_uuid(user))
+        for tenant in db.list_tenants(
+            nicky_user_uuid=scoped_nicky_user_uuid(user),
+            owner_auth_subject=scoped_owner_auth_subject(user),
+        )
     ]
 
 
@@ -500,8 +613,9 @@ async def admin_delete_tenant(
     tenant_id: str,
     user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    require_admin_role(user)
-    tenant = get_tenant_or_404(tenant_id)
+    require_writer(user)
+    scoped = scoped_tenant_id(user, normalize_tenant_id(tenant_id))
+    tenant = get_tenant_or_404(scoped or tenant_id)
     db.deactivate_tenant(tenant.tenant_id)
     return {"status": "deactivated", "tenant_id": tenant.tenant_id}
 
@@ -511,15 +625,43 @@ async def admin_validate_nicky_api_key(
     payload: NickyApiKeyValidationRequest,
     user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    validation = await nicky_client.validate_api_key(payload.nicky_api_key)
+    try:
+        validation = await nicky_client.validate_api_key(payload.nicky_api_key)
+    except NickyApiError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Nicky API key: {exc}") from exc
+    auth0_identifier = "" if admin_auth.is_admin(user, settings) else admin_auth.user_identifier(user)
     owner_uuid = str(validation.get("nicky_user_uuid") or "")
-    if not admin_auth.is_admin(user, settings) and owner_uuid != admin_auth.nicky_user_uuid(user):
-        raise HTTPException(status_code=403, detail="Nicky API key belongs to another user")
+    short_id = str(validation.get("nicky_user_short_id") or "")
+    email = str(validation.get("nicky_user_email") or "") or auth0_identifier
+    nicky_conflict = db.find_active_tenant_by_api_key("nicky_api_key", payload.nicky_api_key)
+    if nicky_conflict:
+        raise HTTPException(status_code=409, detail="Nicky API key is already used by an active tenant")
     return {
         "nicky_user_uuid": owner_uuid,
-        "nicky_user_short_id": validation.get("nicky_user_short_id") or "",
+        "nicky_user_short_id": short_id,
+        "nicky_user_email": email,
         "assets": validation.get("assets") or [],
     }
+
+
+@app.post("/admin/ticket-tailor/validate-api-key")
+async def admin_validate_ticket_tailor_api_key(
+    payload: TicketTailorApiKeyValidationRequest,
+    user: admin_auth.AdminUser = Depends(require_admin),
+) -> dict[str, Any]:
+    conflict = db.find_active_tenant_by_api_key(
+        "ticket_tailor_api_key",
+        payload.ticket_tailor_api_key,
+    )
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail="Ticket Tailor API key is already used by an active tenant",
+        )
+    try:
+        return await ticket_tailor_client.validate_api_key(payload.ticket_tailor_api_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Ticket Tailor API key: {exc}") from exc
 
 
 @app.post("/admin/orders/{ticket_tailor_order_id}/create-nicky-payment-request")

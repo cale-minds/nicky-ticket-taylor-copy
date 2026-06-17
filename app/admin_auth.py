@@ -22,6 +22,22 @@ STATE_KEY = "auth0_state"
 NONCE_KEY = "auth0_nonce"
 RETURN_TO_KEY = "auth0_return_to"
 CODE_VERIFIER_KEY = "auth0_code_verifier"
+NICKY_USER_UUID_CLAIM_KEYS = (
+    "nicky_user_uuid",
+    "nickyUserUuid",
+    "nicky_user_id",
+    "nickyUserId",
+    "user_uuid",
+    "userUuid",
+)
+NICKY_USER_SHORT_ID_CLAIM_KEYS = (
+    "nicky_user_short_id",
+    "nickyUserShortId",
+    "nicky_short_id",
+    "nickyShortId",
+    "short_id",
+    "shortId",
+)
 
 
 @dataclass(frozen=True)
@@ -221,6 +237,16 @@ def has_allowed_role(roles: list[str], allowed_roles: list[str]) -> bool:
     return any(role.lower() in normalized_roles for role in allowed_roles)
 
 
+def has_admin_role(roles: list[str], admin_roles: list[str]) -> bool:
+    normalized_admin_roles = {
+        role.strip().lower() for role in admin_roles if role.strip() and role.strip() != "*"
+    }
+    if not normalized_admin_roles:
+        normalized_admin_roles = {"admin"}
+    normalized_roles = {role.lower() for role in roles}
+    return any(role in normalized_roles for role in normalized_admin_roles)
+
+
 def has_role(user: AdminUser | None, role: str) -> bool:
     if not user:
         return False
@@ -230,10 +256,8 @@ def has_role(user: AdminUser | None, role: str) -> bool:
 def is_admin(user: AdminUser | None, settings: Settings | None = None) -> bool:
     if not user:
         return False
-    if user.auth_method in {"admin_token", "development"}:
-        return True
     if settings is not None:
-        return has_allowed_role(user.roles, settings.admin_allowed_roles)
+        return has_admin_role(user.roles, settings.admin_allowed_roles)
     return has_role(user, "Admin")
 
 
@@ -246,14 +270,11 @@ def is_privileged(user: AdminUser | None, settings: Settings) -> bool:
 
 
 def nicky_user_uuid(user: AdminUser) -> str:
-    for key in (
-        "nicky_user_uuid",
-        "nickyUserUuid",
-        "nicky_user_id",
-        "nickyUserId",
-        "user_uuid",
-        "userUuid",
-    ):
+    return nicky_user_uuid_claim(user) or user.subject.replace("|", "_").replace(":", "_")
+
+
+def nicky_user_uuid_claim(user: AdminUser) -> str:
+    for key in NICKY_USER_UUID_CLAIM_KEYS:
         value = user.claims.get(key)
         if value:
             return str(value)
@@ -262,18 +283,11 @@ def nicky_user_uuid(user: AdminUser) -> str:
         if "nicky" in normalized and ("uuid" in normalized or "user_id" in normalized):
             if value:
                 return str(value)
-    return user.subject.replace("|", "_").replace(":", "_")
+    return ""
 
 
 def nicky_user_short_id(user: AdminUser) -> str:
-    for key in (
-        "nicky_user_short_id",
-        "nickyUserShortId",
-        "nicky_short_id",
-        "nickyShortId",
-        "short_id",
-        "shortId",
-    ):
+    for key in NICKY_USER_SHORT_ID_CLAIM_KEYS:
         value = user.claims.get(key)
         if value:
             return str(value)
@@ -282,6 +296,36 @@ def nicky_user_short_id(user: AdminUser) -> str:
         if "nicky" in normalized and "short" in normalized and value:
             return str(value)
     return ""
+
+
+def user_identifier(user: AdminUser) -> str:
+    return user.email.strip() or user.subject
+
+
+def bind_nicky_user_to_session(
+    request: Request,
+    user: AdminUser,
+    *,
+    nicky_user_uuid: str,
+    nicky_user_short_id: str = "",
+    nicky_user_email: str = "",
+) -> AdminUser:
+    claims = dict(user.claims)
+    claims["nicky_user_uuid"] = nicky_user_uuid
+    if nicky_user_short_id:
+        claims["nicky_user_short_id"] = nicky_user_short_id
+    if nicky_user_email:
+        claims["nicky_user_email"] = nicky_user_email
+    updated_user = AdminUser(
+        subject=user.subject,
+        name=user.name,
+        email=user.email,
+        roles=user.roles,
+        claims=claims,
+        auth_method=user.auth_method,
+    )
+    set_session_user(request, updated_user)
+    return updated_user
 
 
 def user_from_claims(claims: dict[str, Any], *, auth_method: str) -> AdminUser:
@@ -360,38 +404,12 @@ def assert_nonce(claims: dict[str, Any], expected_nonce: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid Auth0 nonce")
 
 
-def make_admin_token_user() -> AdminUser:
-    return AdminUser(
-        subject="admin-token",
-        name="Admin token",
-        email="",
-        roles=["Admin"],
-        claims={"sub": "admin-token", "roles": ["Admin"]},
-        auth_method="admin_token",
-    )
-
-
-def make_development_admin_user() -> AdminUser:
-    return AdminUser(
-        subject="development",
-        name="Development admin",
-        email="",
-        roles=["Admin"],
-        claims={"sub": "development", "roles": ["Admin"]},
-        auth_method="development",
-    )
-
-
 def authenticate_admin_request(
     settings: Settings,
     request: Request,
     *,
-    x_admin_token: str | None = None,
     authorization: str | None = None,
 ) -> AdminUser | None:
-    if settings.admin_token and x_admin_token == settings.admin_token:
-        return make_admin_token_user()
-
     session_user = get_session_user(request)
     if session_user:
         return session_user

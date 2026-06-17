@@ -13,7 +13,8 @@ if not defined AUTH0_DOMAIN set "AUTH0_DOMAIN=dev-eq0ptfwdhb1s1h12.us.auth0.com"
 if not defined AUTH0_CLIENT_ID set "AUTH0_CLIENT_ID=SqrJq2fxJ6adrOFaR24oh9COF4vZwqba"
 if not defined AUTH0_AUDIENCE set "AUTH0_AUDIENCE=https://nicky-tech.azurewebsites.net"
 if not defined AUTH0_CLIENT_SECRET set "AUTH0_CLIENT_SECRET="
-if not defined ADMIN_ALLOWED_ROLES set "ADMIN_ALLOWED_ROLES=*"
+if not defined ADMIN_ALLOWED_ROLES set "ADMIN_ALLOWED_ROLES=Admin"
+if not defined NICKY_API_BASE_URL set "NICKY_API_BASE_URL=https://api-public.dev.pay.nicky.me"
 
 if not defined FASTAPI_EXE (
   if exist "%ROOT%.venv\Scripts\python.exe" (
@@ -33,6 +34,9 @@ echo %APP_BASE_URL%%AUTH0_CALLBACK_PATH%
 echo.
 echo Allowed roles:
 echo %ADMIN_ALLOWED_ROLES%
+echo.
+echo Nicky API:
+echo %NICKY_API_BASE_URL%
 echo.
 echo Health:
 echo %APP_BASE_URL%/health
