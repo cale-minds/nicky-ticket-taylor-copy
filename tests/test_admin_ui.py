@@ -19,7 +19,6 @@ def build_test_client(tmp_path, **settings_overrides) -> TestClient:
         "database_path": tmp_path / "integration.sqlite3",
         "admin_token": "admin-secret",
         "admin_session_secret": "test-session-secret",
-        "default_tenant_id": "demo-tenant",
         "dry_run": True,
         "nicky_default_blockchain_asset_id": "USD.USD",
     }
@@ -61,23 +60,20 @@ def build_test_client(tmp_path, **settings_overrides) -> TestClient:
     return TestClient(app)
 
 
-def test_admin_ui_local_admin_token_login(tmp_path) -> None:
+def test_admin_ui_requires_auth0_configuration(tmp_path) -> None:
     client = build_test_client(tmp_path)
 
     login_page = client.get("/admin-ui/login?return_to=%2Fadmin-ui%2Ftenants")
-    assert login_page.status_code == 200
-    assert "Admin login" in login_page.text
-    assert 'name="return_to" value="/admin-ui/tenants"' in login_page.text
+    assert login_page.status_code == 503
+    assert login_page.json()["detail"] == "Auth0 is required but is not configured"
 
     response = client.post(
         "/admin-ui/login/admin-token",
         data={"admin_token": "admin-secret", "return_to": "/admin-ui/tenants"},
-        follow_redirects=True,
+        follow_redirects=False,
     )
 
-    assert response.status_code == 200
-    assert "Core tenant mapping" in response.text
-    assert "demo-tenant" in response.text
+    assert response.status_code == 404
 
 
 def test_admin_ui_redirects_to_login_when_session_is_missing(tmp_path) -> None:

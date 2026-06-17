@@ -221,6 +221,69 @@ def has_allowed_role(roles: list[str], allowed_roles: list[str]) -> bool:
     return any(role.lower() in normalized_roles for role in allowed_roles)
 
 
+def has_role(user: AdminUser | None, role: str) -> bool:
+    if not user:
+        return False
+    return role.lower() in {item.lower() for item in user.roles}
+
+
+def is_admin(user: AdminUser | None, settings: Settings | None = None) -> bool:
+    if not user:
+        return False
+    if user.auth_method in {"admin_token", "development"}:
+        return True
+    if settings is not None:
+        return has_allowed_role(user.roles, settings.admin_allowed_roles)
+    return has_role(user, "Admin")
+
+
+def is_support(user: AdminUser | None) -> bool:
+    return bool(user and has_role(user, "Support"))
+
+
+def is_privileged(user: AdminUser | None, settings: Settings) -> bool:
+    return bool(user and (is_admin(user, settings) or is_support(user)))
+
+
+def nicky_user_uuid(user: AdminUser) -> str:
+    for key in (
+        "nicky_user_uuid",
+        "nickyUserUuid",
+        "nicky_user_id",
+        "nickyUserId",
+        "user_uuid",
+        "userUuid",
+    ):
+        value = user.claims.get(key)
+        if value:
+            return str(value)
+    for key, value in user.claims.items():
+        normalized = key.lower().replace("-", "_")
+        if "nicky" in normalized and ("uuid" in normalized or "user_id" in normalized):
+            if value:
+                return str(value)
+    return user.subject.replace("|", "_").replace(":", "_")
+
+
+def nicky_user_short_id(user: AdminUser) -> str:
+    for key in (
+        "nicky_user_short_id",
+        "nickyUserShortId",
+        "nicky_short_id",
+        "nickyShortId",
+        "short_id",
+        "shortId",
+    ):
+        value = user.claims.get(key)
+        if value:
+            return str(value)
+    for key, value in user.claims.items():
+        normalized = key.lower().replace("-", "_")
+        if "nicky" in normalized and "short" in normalized and value:
+            return str(value)
+    return ""
+
+
 def user_from_claims(claims: dict[str, Any], *, auth_method: str) -> AdminUser:
     return AdminUser(
         subject=str(claims.get("sub") or ""),
@@ -331,21 +394,13 @@ def authenticate_admin_request(
 
     session_user = get_session_user(request)
     if session_user:
-        if has_allowed_role(session_user.roles, settings.admin_allowed_roles):
-            return session_user
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing admin role")
+        return session_user
 
     bearer_token = bearer_token_from_header(authorization)
     if bearer_token and auth0_enabled(settings):
         audience = settings.auth0_audience or settings.auth0_client_id
         claims = decode_and_verify_jwt(settings, bearer_token, audience=audience)
-        user = user_from_claims(claims, auth_method="bearer")
-        if has_allowed_role(user.roles, settings.admin_allowed_roles):
-            return user
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing admin role")
-
-    if not settings.admin_token and not auth0_enabled(settings):
-        return make_development_admin_user()
+        return user_from_claims(claims, auth_method="bearer")
 
     return None
 

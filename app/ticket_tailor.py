@@ -16,8 +16,8 @@ class TicketTailorClient:
     async def confirm_offline_payment(
         self, tenant: TenantConfig, order_id: str
     ) -> dict[str, str]:
-        if tenant.dry_run or not self.configured(tenant):
-            return {"status": "dry_run", "order_id": order_id}
+        if not self.configured(tenant):
+            raise ValueError("Ticket Tailor tenant is not configured")
 
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
@@ -33,8 +33,8 @@ class TicketTailorClient:
     async def list_issued_tickets_for_order(
         self, tenant: TenantConfig, order_id: str
     ) -> list[dict[str, object]]:
-        if tenant.dry_run or not self.configured(tenant):
-            return []
+        if not self.configured(tenant):
+            raise ValueError("Ticket Tailor tenant is not configured")
 
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.get(
@@ -57,8 +57,8 @@ class TicketTailorClient:
     async def void_issued_ticket(
         self, tenant: TenantConfig, issued_ticket_id: str
     ) -> dict[str, str]:
-        if tenant.dry_run or not self.configured(tenant):
-            return {"status": "dry_run", "issued_ticket_id": issued_ticket_id}
+        if not self.configured(tenant):
+            raise ValueError("Ticket Tailor tenant is not configured")
 
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(

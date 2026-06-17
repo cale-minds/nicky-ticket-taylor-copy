@@ -16,8 +16,8 @@ if not defined LOCAL_URL set "LOCAL_URL=http://127.0.0.1:8017"
 if not defined FASTAPI_HOST set "FASTAPI_HOST=127.0.0.1"
 if not defined FASTAPI_PORT set "FASTAPI_PORT=8017"
 if not defined START_FASTAPI set "START_FASTAPI=true"
-if not defined TENANT_ID set "TENANT_ID=demo-tenant"
-if not defined NICKY_WEBHOOK_TOKEN set "NICKY_WEBHOOK_TOKEN=tenant_webhook_token_here"
+if not defined RESTART_FASTAPI set "RESTART_FASTAPI=true"
+if not defined TENANT_ID set "TENANT_ID="
 if not defined FASTAPI_EXE (
   if exist "%ROOT%.venv\Scripts\python.exe" (
     set "FASTAPI_EXE=%ROOT%.venv\Scripts\python.exe"
@@ -56,6 +56,11 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if exist "%LOG_FILE%" del /q "%LOG_FILE%" >nul 2>nul
 if exist "%URL_FILE%" del /q "%URL_FILE%" >nul 2>nul
 
+if /I "%START_FASTAPI%"=="true" call :PRECHECK_FASTAPI_RUNTIME
+if errorlevel 1 exit /b 1
+if /I "%START_FASTAPI%"=="true" call :PRECHECK_AUTH0
+if errorlevel 1 exit /b 1
+
 echo Subindo Cloudflare Tunnel para %LOCAL_URL% ...
 echo Log: %LOG_FILE%
 echo.
@@ -72,7 +77,7 @@ for /L %%i in (1,1,60) do (
     )
   )
   if defined PUBLIC_URL goto :FOUND_URL
-  timeout /t 1 /nobreak >nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 1" >nul
 )
 
 echo [ERROR] Nao foi possivel capturar a URL do Cloudflare Tunnel.
@@ -88,15 +93,62 @@ set "HEALTH_URL=%PUBLIC_URL%/health"
 set "DOCS_URL=%PUBLIC_URL%/docs"
 set "ADMIN_UI_URL=%PUBLIC_URL%/admin-ui"
 set "AUTH0_CALLBACK_URL=%PUBLIC_URL%/admin-ui/callback"
-set "TICKET_TAILOR_WEBHOOK_URL=%PUBLIC_URL%/webhooks/ticket-tailor/%TENANT_ID%"
-set "NICKY_WEBHOOK_URL=%PUBLIC_URL%/webhooks/nicky/%TENANT_ID%?token=%NICKY_WEBHOOK_TOKEN%"
+if defined TENANT_ID (
+  set "TICKET_TAILOR_WEBHOOK_URL=%PUBLIC_URL%/webhooks/ticket-tailor/%TENANT_ID%"
+) else (
+  set "TICKET_TAILOR_WEBHOOK_URL=%PUBLIC_URL%/webhooks/ticket-tailor/{tenant_uuid}"
+)
 set "NICKY_SUCCESS_URL=%PUBLIC_URL%/nicky/success"
 set "NICKY_CANCEL_URL=%PUBLIC_URL%/nicky/cancel"
 
 if /I "%START_FASTAPI%"=="true" call :ENSURE_FASTAPI
+if errorlevel 1 exit /b 1
 goto :WRITE_URL_FILE
 
+:PRECHECK_FASTAPI_RUNTIME
+if /I not "%RESTART_FASTAPI%"=="true" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $ProgressPreference='SilentlyContinue'; (Invoke-WebRequest -Uri '%LOCAL_URL%/health' -UseBasicParsing -TimeoutSec 2) | Out-Null; exit 0 } catch { exit 1 }"
+  if not errorlevel 1 exit /b 0
+)
+
+"%FASTAPI_EXE%" -c "import uvicorn" >nul 2>nul
+if not errorlevel 1 exit /b 0
+
+echo [ERROR] O helper precisa iniciar FastAPI, mas o runtime selecionado nao possui o modulo 'uvicorn'.
+echo Runtime verificado:
+echo %FASTAPI_EXE%
+echo.
+echo Corrija o ambiente antes de abrir o tunel:
+echo   python -m venv .venv
+echo   .\.venv\Scripts\Activate.ps1
+echo   pip install -e .
+echo.
+echo Ou inicie o servico manualmente e execute novamente com:
+echo   set START_FASTAPI=false
+exit /b 1
+
+:PRECHECK_AUTH0
+pushd "%ROOT%" >nul
+"%FASTAPI_EXE%" -c "from app.config import get_settings; from app.admin_auth import auth0_enabled; raise SystemExit(0 if auth0_enabled(get_settings()) else 1)" >nul 2>nul
+set "AUTH0_CHECK=%ERRORLEVEL%"
+popd >nul
+if "%AUTH0_CHECK%"=="0" exit /b 0
+
+echo [ERROR] Auth0 e obrigatorio, mas AUTH0_DOMAIN/AUTH0_CLIENT_ID nao estao configurados.
+echo.
+echo Crie um .env a partir de .env.example ou defina antes de executar:
+echo   set AUTH0_DOMAIN=seu-tenant.auth0.com
+echo   set AUTH0_CLIENT_ID=seu-client-id
+echo   set AUTH0_AUDIENCE=sua-audience-opcional
+echo   set ADMIN_ALLOWED_ROLES=Admin
+echo.
+echo Para o teste local com o client Auth0 de desenvolvimento, use:
+echo   start-local-auth0-compat.bat
+exit /b 1
+
 :ENSURE_FASTAPI
+if /I "%RESTART_FASTAPI%"=="true" call :STOP_FASTAPI_ON_PORT
+
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $ProgressPreference='SilentlyContinue'; (Invoke-WebRequest -Uri '%LOCAL_URL%/health' -UseBasicParsing -TimeoutSec 2) | Out-Null; exit 0 } catch { exit 1 }"
 if not errorlevel 1 (
   echo FastAPI ja respondeu em %LOCAL_URL%/health.
@@ -108,19 +160,32 @@ echo FastAPI nao respondeu em %LOCAL_URL%/health.
 echo Subindo FastAPI com APP_BASE_URL=%PUBLIC_URL% ...
 if exist "%FASTAPI_LOG_FILE%" del /q "%FASTAPI_LOG_FILE%" >nul 2>nul
 if exist "%FASTAPI_ERR_FILE%" del /q "%FASTAPI_ERR_FILE%" >nul 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $env:APP_BASE_URL='%PUBLIC_URL%'; $env:NICKY_SUCCESS_URL='%NICKY_SUCCESS_URL%'; $env:NICKY_CANCEL_URL='%NICKY_CANCEL_URL%'; Start-Process -FilePath '%FASTAPI_EXE%' -ArgumentList @('-m','uvicorn','app.main:app','--host','%FASTAPI_HOST%','--port','%FASTAPI_PORT%') -WorkingDirectory '%ROOT%' -WindowStyle Minimized -RedirectStandardOutput '%FASTAPI_LOG_FILE%' -RedirectStandardError '%FASTAPI_ERR_FILE%'"
+set "APP_BASE_URL=%PUBLIC_URL%"
+set "NICKY_SUCCESS_URL=%NICKY_SUCCESS_URL%"
+set "NICKY_CANCEL_URL=%NICKY_CANCEL_URL%"
+start "Nicky Ticket Tailor FastAPI" /min /d "%ROOT%" cmd /c ""%FASTAPI_EXE%" -m uvicorn app.main:app --host %FASTAPI_HOST% --port %FASTAPI_PORT% > "%FASTAPI_LOG_FILE%" 2> "%FASTAPI_ERR_FILE%""
 for /L %%i in (1,1,30) do (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "try { (Invoke-WebRequest -Uri '%LOCAL_URL%/health' -UseBasicParsing -TimeoutSec 2) | Out-Null; exit 0 } catch { exit 1 }"
   if not errorlevel 1 (
     echo FastAPI pronto em %LOCAL_URL%
     exit /b 0
   )
-  timeout /t 1 /nobreak >nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 1" >nul
 )
 echo [WARN] FastAPI foi iniciado, mas o health check ainda nao respondeu.
 echo Veja logs:
 echo %FASTAPI_LOG_FILE%
 echo %FASTAPI_ERR_FILE%
+exit /b 1
+
+:STOP_FASTAPI_ON_PORT
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":%FASTAPI_PORT% .*LISTENING" 2^>nul') do (
+  if not "%%p"=="0" (
+    echo Reiniciando FastAPI: parando processo na porta %FASTAPI_PORT% ^(PID %%p^) ...
+    taskkill /PID %%p /F >nul 2>nul
+  )
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 1" >nul
 exit /b 0
 
 :WRITE_URL_FILE
@@ -136,7 +201,7 @@ exit /b 0
   echo %TICKET_TAILOR_WEBHOOK_URL%
   echo.
   echo Nicky webhook:
-  echo %NICKY_WEBHOOK_URL%
+  echo Cadastrado automaticamente ao salvar o tenant na UI.
   echo.
   echo Nicky successUrl:
   echo %NICKY_SUCCESS_URL%

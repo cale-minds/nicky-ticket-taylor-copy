@@ -7,8 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from app.config import Settings
-from app.tenants import TenantConfig, keywords_to_csv, tenant_from_row, tenant_from_settings
+from app.tenants import TenantConfig, keywords_to_csv, tenant_from_row
 
 
 SCHEMA = """
@@ -16,19 +15,21 @@ CREATE TABLE IF NOT EXISTS tenants (
   tenant_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
+  nicky_user_uuid TEXT NOT NULL DEFAULT '',
+  nicky_user_short_id TEXT NOT NULL DEFAULT '',
   ticket_tailor_api_key TEXT NOT NULL DEFAULT '',
   ticket_tailor_webhook_signing_secret TEXT NOT NULL DEFAULT '',
-  ticket_tailor_offline_payment_keywords TEXT NOT NULL DEFAULT 'nicky,nicky payment',
+  ticket_tailor_offline_payment_keywords TEXT NOT NULL DEFAULT 'nicky payment',
   nicky_api_key TEXT NOT NULL DEFAULT '',
   nicky_default_blockchain_asset_id TEXT NOT NULL DEFAULT '',
   nicky_receiver_short_id TEXT NOT NULL DEFAULT '',
   nicky_webhook_token TEXT NOT NULL DEFAULT '',
   nicky_webhook_type INTEGER NOT NULL DEFAULT 2,
   auto_create_nicky_payment_request INTEGER NOT NULL DEFAULT 1,
-  auto_confirm_ticket_tailor_payments INTEGER NOT NULL DEFAULT 0,
+  auto_confirm_ticket_tailor_payments INTEGER NOT NULL DEFAULT 1,
   nicky_send_notification INTEGER NOT NULL DEFAULT 1,
   skip_nicky INTEGER NOT NULL DEFAULT 0,
-  dry_run INTEGER NOT NULL DEFAULT 1,
+  dry_run INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -95,6 +96,8 @@ class Database:
             legacy_tables = self._prepare_legacy_tables(conn)
             conn.executescript(SCHEMA)
             self._copy_legacy_tables(conn, legacy_tables)
+            self._ensure_column(conn, "tenants", "nicky_user_uuid", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "tenants", "nicky_user_short_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "tenants", "skip_nicky", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "order_logs", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
             self._ensure_column(
@@ -103,14 +106,6 @@ class Database:
             self._ensure_column(
                 conn, "integration_orders", "ticket_tailor_void_reason", "TEXT"
             )
-
-    def bootstrap_default_tenant(self, settings: Settings) -> TenantConfig:
-        tenant = self.get_tenant(settings.default_tenant_id)
-        if tenant:
-            return tenant
-        tenant = tenant_from_settings(settings)
-        self.upsert_tenant(tenant)
-        return tenant
 
     @staticmethod
     def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -244,7 +239,8 @@ class Database:
             conn.execute(
                 """
                 INSERT INTO tenants(
-                  tenant_id, name, active, ticket_tailor_api_key,
+                  tenant_id, name, active, nicky_user_uuid, nicky_user_short_id,
+                  ticket_tailor_api_key,
                   ticket_tailor_webhook_signing_secret,
                   ticket_tailor_offline_payment_keywords, nicky_api_key,
                   nicky_default_blockchain_asset_id, nicky_receiver_short_id,
@@ -253,10 +249,12 @@ class Database:
                   auto_confirm_ticket_tailor_payments, nicky_send_notification,
                   skip_nicky, dry_run
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant_id) DO UPDATE SET
                   name = excluded.name,
                   active = excluded.active,
+                  nicky_user_uuid = excluded.nicky_user_uuid,
+                  nicky_user_short_id = excluded.nicky_user_short_id,
                   ticket_tailor_api_key = excluded.ticket_tailor_api_key,
                   ticket_tailor_webhook_signing_secret = excluded.ticket_tailor_webhook_signing_secret,
                   ticket_tailor_offline_payment_keywords = excluded.ticket_tailor_offline_payment_keywords,
@@ -276,6 +274,8 @@ class Database:
                     tenant.tenant_id,
                     tenant.name,
                     int(tenant.active),
+                    tenant.nicky_user_uuid,
+                    tenant.nicky_user_short_id,
                     tenant.ticket_tailor_api_key,
                     tenant.ticket_tailor_webhook_signing_secret,
                     keywords_to_csv(tenant.ticket_tailor_offline_payment_keywords),
@@ -290,6 +290,17 @@ class Database:
                     int(tenant.skip_nicky),
                     int(tenant.dry_run),
                 ),
+            )
+
+    def deactivate_tenant(self, tenant_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tenants
+                SET active = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
             )
 
     def get_tenant(self, tenant_id: str) -> TenantConfig | None:
@@ -308,9 +319,12 @@ class Database:
         query: str | None = None,
         active: str | None = None,
         configuration: str | None = None,
+        nicky_user_uuid: str | None = None,
     ) -> list[TenantConfig]:
         with self.connect() as conn:
-            where_clause, params = self._tenant_filters(query, active, configuration)
+            where_clause, params = self._tenant_filters(
+                query, active, configuration, nicky_user_uuid
+            )
             limit_clause = ""
             if limit is not None:
                 limit_clause = "LIMIT ? OFFSET ?"
@@ -332,9 +346,12 @@ class Database:
         query: str | None = None,
         active: str | None = None,
         configuration: str | None = None,
+        nicky_user_uuid: str | None = None,
     ) -> int:
         with self.connect() as conn:
-            where_clause, params = self._tenant_filters(query, active, configuration)
+            where_clause, params = self._tenant_filters(
+                query, active, configuration, nicky_user_uuid
+            )
             row = conn.execute(
                 f"SELECT COUNT(*) AS count FROM tenants {where_clause}",
                 params,
@@ -343,14 +360,22 @@ class Database:
 
     @staticmethod
     def _tenant_filters(
-        query: str | None, active: str | None, configuration: str | None
+        query: str | None,
+        active: str | None,
+        configuration: str | None,
+        nicky_user_uuid: str | None = None,
     ) -> tuple[str, list[Any]]:
         conditions: list[str] = []
         params: list[Any] = []
         if query:
-            conditions.append("(tenant_id LIKE ? OR name LIKE ?)")
+            conditions.append(
+                "(tenant_id LIKE ? OR name LIKE ? OR nicky_user_uuid LIKE ? OR nicky_user_short_id LIKE ?)"
+            )
             like = f"%{query}%"
-            params.extend([like, like])
+            params.extend([like, like, like, like])
+        if nicky_user_uuid:
+            conditions.append("nicky_user_uuid = ?")
+            params.append(nicky_user_uuid)
         if active == "active":
             conditions.append("active = 1")
         elif active == "inactive":

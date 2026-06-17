@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -16,8 +17,9 @@ sys.path.insert(0, str(ROOT))
 from app.config import get_settings  # noqa: E402
 from app.db import Database  # noqa: E402
 from app.tenants import (  # noqa: E402
+    NICKY_PAYMENT_KEYWORDS,
+    NICKY_WEBHOOK_TYPE,
     normalize_tenant_id,
-    parse_keywords,
     tenant_from_settings,
     tenant_to_safe_dict,
 )
@@ -45,19 +47,11 @@ def main() -> int:
     parser.add_argument("--tenant-id", required=True)
     parser.add_argument("--name")
     parser.add_argument("--ticket-tailor-api-key")
-    parser.add_argument("--ticket-tailor-webhook-signing-secret")
-    parser.add_argument("--ticket-tailor-offline-payment-keywords")
     parser.add_argument("--nicky-api-key")
     parser.add_argument("--nicky-default-blockchain-asset-id")
-    parser.add_argument("--nicky-receiver-short-id")
-    parser.add_argument("--nicky-webhook-token")
-    parser.add_argument("--nicky-webhook-type", type=int)
+    parser.add_argument("--nicky-user-uuid")
+    parser.add_argument("--nicky-user-short-id")
     add_optional_bool(parser, "--active", "active")
-    add_optional_bool(parser, "--dry-run", "dry_run")
-    add_optional_bool(parser, "--auto-create-nicky-payment-request", "auto_create")
-    add_optional_bool(parser, "--auto-confirm-ticket-tailor-payments", "auto_confirm")
-    add_optional_bool(parser, "--nicky-send-notification", "send_notification")
-    add_optional_bool(parser, "--skip-nicky", "skip_nicky")
     args = parser.parse_args()
 
     settings = get_settings()
@@ -70,23 +64,21 @@ def main() -> int:
         {
             "name": args.name,
             "active": args.active,
+            "nicky_user_uuid": args.nicky_user_uuid or args.tenant_id,
+            "nicky_user_short_id": args.nicky_user_short_id,
             "ticket_tailor_api_key": args.ticket_tailor_api_key,
-            "ticket_tailor_webhook_signing_secret": args.ticket_tailor_webhook_signing_secret,
-            "ticket_tailor_offline_payment_keywords": parse_keywords(
-                args.ticket_tailor_offline_payment_keywords
-            )
-            if args.ticket_tailor_offline_payment_keywords is not None
-            else None,
+            "ticket_tailor_webhook_signing_secret": "",
+            "ticket_tailor_offline_payment_keywords": NICKY_PAYMENT_KEYWORDS,
             "nicky_api_key": args.nicky_api_key,
             "nicky_default_blockchain_asset_id": args.nicky_default_blockchain_asset_id,
-            "nicky_receiver_short_id": args.nicky_receiver_short_id,
-            "nicky_webhook_token": args.nicky_webhook_token,
-            "nicky_webhook_type": args.nicky_webhook_type,
-            "auto_create_nicky_payment_request": args.auto_create,
-            "auto_confirm_ticket_tailor_payments": args.auto_confirm,
-            "nicky_send_notification": args.send_notification,
-            "skip_nicky": args.skip_nicky,
-            "dry_run": args.dry_run,
+            "nicky_receiver_short_id": args.nicky_user_short_id,
+            "nicky_webhook_token": base.nicky_webhook_token or secrets.token_urlsafe(24),
+            "nicky_webhook_type": NICKY_WEBHOOK_TYPE,
+            "auto_create_nicky_payment_request": True,
+            "auto_confirm_ticket_tailor_payments": True,
+            "nicky_send_notification": True,
+            "skip_nicky": False,
+            "dry_run": False,
         }
     )
     tenant = replace(base, tenant_id=tenant_id, **updates)

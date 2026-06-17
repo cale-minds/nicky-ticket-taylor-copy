@@ -26,6 +26,53 @@ def test_allowed_roles_wildcard_allows_authenticated_user() -> None:
     assert admin_auth.has_allowed_role(["Viewer"], ["*"]) is True
 
 
+def test_admin_allowed_roles_define_admin_profile() -> None:
+    settings = Settings(admin_allowed_roles=["TenantAdmin"])
+    user = admin_auth.AdminUser(
+        subject="auth0|admin",
+        name="Admin",
+        email="admin@example.com",
+        roles=["TenantAdmin"],
+        claims={"sub": "auth0|admin", "roles": ["TenantAdmin"]},
+        auth_method="auth0",
+    )
+
+    assert admin_auth.is_admin(user, settings) is True
+    assert admin_auth.is_privileged(user, settings) is True
+
+
+def test_support_is_read_only_privileged_profile() -> None:
+    settings = Settings(admin_allowed_roles=["Admin"])
+    user = admin_auth.AdminUser(
+        subject="auth0|support",
+        name="Support",
+        email="support@example.com",
+        roles=["Support"],
+        claims={"sub": "auth0|support", "roles": ["Support"]},
+        auth_method="auth0",
+    )
+
+    assert admin_auth.is_admin(user, settings) is False
+    assert admin_auth.is_support(user) is True
+    assert admin_auth.is_privileged(user, settings) is True
+
+
+def test_user_without_admin_or_support_role_is_common() -> None:
+    settings = Settings(admin_allowed_roles=["Admin"])
+    user = admin_auth.AdminUser(
+        subject="auth0|user",
+        name="User",
+        email="user@example.com",
+        roles=[],
+        claims={"sub": "auth0|user"},
+        auth_method="auth0",
+    )
+
+    assert admin_auth.is_admin(user, settings) is False
+    assert admin_auth.is_support(user) is False
+    assert admin_auth.is_privileged(user, settings) is False
+
+
 def test_auth0_domain_accepts_host_or_url() -> None:
     assert (
         admin_auth.auth0_domain(Settings(auth0_domain="tenant.us.auth0.com"))

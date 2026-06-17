@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any
@@ -19,9 +20,10 @@ from app.nicky import NickyClient
 from app.security import SignatureError, verify_ticket_tailor_signature
 from app.service import IntegrationService, row_to_dict
 from app.tenants import (
+    NICKY_PAYMENT_KEYWORDS,
+    NICKY_WEBHOOK_TYPE,
     TenantConfig,
     normalize_tenant_id,
-    parse_keywords,
     tenant_from_settings,
     tenant_to_safe_dict,
 )
@@ -56,24 +58,17 @@ class TenantUpsertRequest(BaseModel):
     name: str | None = None
     active: bool | None = None
     ticket_tailor_api_key: str | None = None
-    ticket_tailor_webhook_signing_secret: str | None = None
-    ticket_tailor_offline_payment_keywords: str | list[str] | None = None
     nicky_api_key: str | None = None
     nicky_default_blockchain_asset_id: str | None = None
-    nicky_receiver_short_id: str | None = None
-    nicky_webhook_token: str | None = None
-    nicky_webhook_type: int | None = None
-    auto_create_nicky_payment_request: bool | None = None
-    auto_confirm_ticket_tailor_payments: bool | None = None
-    nicky_send_notification: bool | None = None
-    skip_nicky: bool | None = None
-    dry_run: bool | None = None
+
+
+class NickyApiKeyValidationRequest(BaseModel):
+    nicky_api_key: str
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init()
-    db.bootstrap_default_tenant(settings)
     expiration_task: asyncio.Task[None] | None = None
     if settings.ticket_tailor_pending_ticket_expiration_hours > 0:
         expiration_task = asyncio.create_task(expire_overdue_orders_loop())
@@ -125,6 +120,31 @@ def require_admin(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin authentication required")
 
 
+def require_admin_role(user: admin_auth.AdminUser) -> None:
+    if not admin_auth.is_admin(user, settings):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+
+
+def require_writer(user: admin_auth.AdminUser) -> None:
+    if admin_auth.is_support(user) and not admin_auth.is_admin(user, settings):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Support access is read-only")
+
+
+def scoped_nicky_user_uuid(user: admin_auth.AdminUser) -> str | None:
+    if admin_auth.is_privileged(user, settings):
+        return None
+    return admin_auth.nicky_user_uuid(user)
+
+
+def scoped_tenant_id(user: admin_auth.AdminUser, requested: str | None = None) -> str | None:
+    owner_uuid = scoped_nicky_user_uuid(user)
+    if not owner_uuid:
+        return requested
+    if requested and requested != owner_uuid:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant outside user scope")
+    return owner_uuid
+
+
 app.include_router(
     create_admin_ui_router(
         settings=settings,
@@ -150,25 +170,70 @@ def get_tenant_or_404(tenant_id: str, *, require_active: bool = False) -> Tenant
     return tenant
 
 
-def build_tenant_config(tenant_id: str, payload: TenantUpsertRequest) -> TenantConfig:
+async def build_tenant_config(
+    tenant_id: str | None,
+    payload: TenantUpsertRequest,
+    user: admin_auth.AdminUser,
+) -> TenantConfig:
+    require_writer(user)
+    requested_tenant_id = tenant_id or payload.tenant_id
+    existing = db.get_tenant(normalize_tenant_id(requested_tenant_id)) if requested_tenant_id else None
+    api_key = payload.nicky_api_key or (existing.nicky_api_key if existing else "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Nicky API key is required")
+
     try:
-        normalized_tenant_id = normalize_tenant_id(tenant_id)
+        nicky_validation = await nicky_client.validate_api_key(api_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Nicky API key: {exc}") from exc
+
+    nicky_user_uuid = str(nicky_validation.get("nicky_user_uuid") or "").strip()
+    nicky_user_short_id = str(nicky_validation.get("nicky_user_short_id") or "").strip()
+    if not nicky_user_uuid:
+        raise HTTPException(status_code=400, detail="Nicky API key validation did not return a user UUID")
+
+    if not admin_auth.is_admin(user, settings) and nicky_user_uuid != admin_auth.nicky_user_uuid(user):
+        raise HTTPException(status_code=403, detail="Nicky API key belongs to another user")
+
+    resolved_tenant_id = requested_tenant_id if admin_auth.is_admin(user, settings) and requested_tenant_id else nicky_user_uuid
+    try:
+        normalized_tenant_id = normalize_tenant_id(resolved_tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    base = db.get_tenant(normalized_tenant_id) or tenant_from_settings(
-        settings, normalized_tenant_id
-    )
+    base = existing or db.get_tenant(normalized_tenant_id) or tenant_from_settings(settings, normalized_tenant_id)
     updates = model_data(payload)
     updates.pop("tenant_id", None)
-    if "ticket_tailor_offline_payment_keywords" in updates:
-        updates["ticket_tailor_offline_payment_keywords"] = parse_keywords(
-            updates["ticket_tailor_offline_payment_keywords"]
-        )
     updates = {key: value for key, value in updates.items() if value is not None}
-    if not updates.get("name") and base.name == settings.default_tenant_id:
-        updates.setdefault("name", normalized_tenant_id)
-    return replace(base, tenant_id=normalized_tenant_id, **updates)
+    asset_id = str(updates.get("nicky_default_blockchain_asset_id") or base.nicky_default_blockchain_asset_id or "")
+    available_asset_ids = {str(asset.get("id") or "") for asset in nicky_validation.get("assets") or []}
+    if not asset_id:
+        raise HTTPException(status_code=400, detail="Nicky asset is required")
+    if available_asset_ids and asset_id not in available_asset_ids:
+        raise HTTPException(status_code=400, detail="Selected asset is not available for this Nicky API key")
+
+    webhook_token = base.nicky_webhook_token or secrets.token_urlsafe(24)
+    return replace(
+        base,
+        tenant_id=normalized_tenant_id,
+        name=str(updates.get("name") or nicky_user_short_id or normalized_tenant_id),
+        active=bool(updates.get("active", True)),
+        nicky_user_uuid=nicky_user_uuid,
+        nicky_user_short_id=nicky_user_short_id,
+        ticket_tailor_api_key=str(updates.get("ticket_tailor_api_key") or base.ticket_tailor_api_key),
+        ticket_tailor_webhook_signing_secret="",
+        ticket_tailor_offline_payment_keywords=NICKY_PAYMENT_KEYWORDS,
+        nicky_api_key=api_key,
+        nicky_default_blockchain_asset_id=asset_id,
+        nicky_receiver_short_id=nicky_user_short_id,
+        nicky_webhook_token=webhook_token,
+        nicky_webhook_type=NICKY_WEBHOOK_TYPE,
+        auto_create_nicky_payment_request=True,
+        auto_confirm_ticket_tailor_payments=True,
+        nicky_send_notification=True,
+        skip_nicky=False,
+        dry_run=False,
+    )
 
 
 def require_nicky_token(
@@ -212,10 +277,8 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "env": settings.app_env,
-        "default_tenant_id": settings.default_tenant_id,
         "tenant_count": len(tenants),
         "active_tenant_count": len(active_tenants),
-        "dry_run": settings.dry_run,
         "ticket_tailor_pending_ticket_expiration_hours": (
             settings.ticket_tailor_pending_ticket_expiration_hours
         ),
@@ -305,9 +368,7 @@ async def ticket_tailor_webhook_default(
         default=None, alias="Tickettailor-Webhook-Signature"
     ),
 ) -> dict[str, Any]:
-    return await handle_ticket_tailor_webhook(
-        settings.default_tenant_id, request, tickettailor_webhook_signature
-    )
+    raise HTTPException(status_code=404, detail="Tenant id is required")
 
 
 @app.post("/webhooks/ticket-tailor/{tenant_id}")
@@ -348,9 +409,7 @@ async def nicky_webhook_default(
     token: str | None = Query(default=None),
     x_nicky_webhook_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    return await handle_nicky_webhook(
-        settings.default_tenant_id, request, token, x_nicky_webhook_token
-    )
+    raise HTTPException(status_code=404, detail="Tenant id is required")
 
 
 @app.post("/webhooks/nicky/{tenant_id}")
@@ -365,12 +424,13 @@ async def nicky_webhook_for_tenant(
 
 @app.get("/orders")
 async def list_orders(
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
     limit: int = 50,
     tenant_id: str | None = Query(default=None),
 ) -> list[dict[str, Any]]:
     try:
         normalized_tenant_id = normalize_tenant_id(tenant_id) if tenant_id else None
+        normalized_tenant_id = scoped_tenant_id(user, normalized_tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return [
@@ -382,11 +442,12 @@ async def list_orders(
 @app.get("/orders/{ticket_tailor_order_id}")
 async def get_order(
     ticket_tailor_order_id: str,
-    _: None = Depends(require_admin),
-    tenant_id: str = Query(default=settings.default_tenant_id),
+    user: admin_auth.AdminUser = Depends(require_admin),
+    tenant_id: str = Query(...),
 ) -> dict[str, Any]:
     try:
         normalized_tenant_id = normalize_tenant_id(tenant_id)
+        normalized_tenant_id = scoped_tenant_id(user, normalized_tenant_id) or normalized_tenant_id
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = db.get_order(normalized_tenant_id, ticket_tailor_order_id)
@@ -396,48 +457,76 @@ async def get_order(
 
 
 @app.get("/admin/tenants")
-async def admin_list_tenants(_: None = Depends(require_admin)) -> list[dict[str, Any]]:
-    return [tenant_to_safe_dict(tenant) for tenant in db.list_tenants()]
+async def admin_list_tenants(user: admin_auth.AdminUser = Depends(require_admin)) -> list[dict[str, Any]]:
+    return [
+        tenant_to_safe_dict(tenant)
+        for tenant in db.list_tenants(nicky_user_uuid=scoped_nicky_user_uuid(user))
+    ]
 
 
 @app.post("/admin/tenants")
 async def admin_upsert_tenant(
-    payload: TenantUpsertRequest, _: None = Depends(require_admin)
+    payload: TenantUpsertRequest, user: admin_auth.AdminUser = Depends(require_admin)
 ) -> dict[str, Any]:
-    if not payload.tenant_id:
-        raise HTTPException(status_code=400, detail="tenant_id is required")
-    tenant = build_tenant_config(payload.tenant_id, payload)
+    tenant = await build_tenant_config(payload.tenant_id, payload, user)
     db.upsert_tenant(tenant)
+    await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant))
     return tenant_to_safe_dict(tenant)
 
 
 @app.get("/admin/tenants/{tenant_id}")
 async def admin_get_tenant(
-    tenant_id: str, _: None = Depends(require_admin)
+    tenant_id: str, user: admin_auth.AdminUser = Depends(require_admin)
 ) -> dict[str, Any]:
-    return tenant_to_safe_dict(get_tenant_or_404(tenant_id))
+    scoped = scoped_tenant_id(user, normalize_tenant_id(tenant_id))
+    return tenant_to_safe_dict(get_tenant_or_404(scoped or tenant_id))
 
 
 @app.put("/admin/tenants/{tenant_id}")
 async def admin_update_tenant(
     tenant_id: str,
     payload: TenantUpsertRequest,
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    tenant = build_tenant_config(tenant_id, payload)
+    scoped_tenant_id(user, normalize_tenant_id(tenant_id))
+    tenant = await build_tenant_config(tenant_id, payload, user)
     db.upsert_tenant(tenant)
+    await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant))
     return tenant_to_safe_dict(tenant)
+
+
+@app.delete("/admin/tenants/{tenant_id}")
+async def admin_delete_tenant(
+    tenant_id: str,
+    user: admin_auth.AdminUser = Depends(require_admin),
+) -> dict[str, Any]:
+    require_admin_role(user)
+    tenant = get_tenant_or_404(tenant_id)
+    db.deactivate_tenant(tenant.tenant_id)
+    return {"status": "deactivated", "tenant_id": tenant.tenant_id}
+
+
+@app.post("/admin/nicky/validate-api-key")
+async def admin_validate_nicky_api_key(
+    payload: NickyApiKeyValidationRequest,
+    user: admin_auth.AdminUser = Depends(require_admin),
+) -> dict[str, Any]:
+    validation = await nicky_client.validate_api_key(payload.nicky_api_key)
+    owner_uuid = str(validation.get("nicky_user_uuid") or "")
+    if not admin_auth.is_admin(user, settings) and owner_uuid != admin_auth.nicky_user_uuid(user):
+        raise HTTPException(status_code=403, detail="Nicky API key belongs to another user")
+    return {
+        "nicky_user_uuid": owner_uuid,
+        "nicky_user_short_id": validation.get("nicky_user_short_id") or "",
+        "assets": validation.get("assets") or [],
+    }
 
 
 @app.post("/admin/orders/{ticket_tailor_order_id}/create-nicky-payment-request")
 async def admin_create_default_nicky_payment_request(
     ticket_tailor_order_id: str, _: None = Depends(require_admin)
 ) -> dict[str, Any]:
-    tenant = get_tenant_or_404(settings.default_tenant_id)
-    try:
-        return await service.create_nicky_payment_request(tenant, ticket_tailor_order_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    raise HTTPException(status_code=404, detail="Tenant id is required")
 
 
 @app.post(
@@ -446,8 +535,9 @@ async def admin_create_default_nicky_payment_request(
 async def admin_create_tenant_nicky_payment_request(
     tenant_id: str,
     ticket_tailor_order_id: str,
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
+    require_admin_role(user)
     tenant = get_tenant_or_404(tenant_id)
     try:
         return await service.create_nicky_payment_request(tenant, ticket_tailor_order_id)
@@ -459,11 +549,7 @@ async def admin_create_tenant_nicky_payment_request(
 async def admin_confirm_default_ticket_tailor_payment(
     ticket_tailor_order_id: str, _: None = Depends(require_admin)
 ) -> dict[str, Any]:
-    tenant = get_tenant_or_404(settings.default_tenant_id)
-    try:
-        return await service.confirm_ticket_tailor_payment(tenant, ticket_tailor_order_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    raise HTTPException(status_code=404, detail="Tenant id is required")
 
 
 @app.post(
@@ -472,8 +558,9 @@ async def admin_confirm_default_ticket_tailor_payment(
 async def admin_confirm_tenant_ticket_tailor_payment(
     tenant_id: str,
     ticket_tailor_order_id: str,
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
+    require_admin_role(user)
     tenant = get_tenant_or_404(tenant_id)
     try:
         return await service.confirm_ticket_tailor_payment(tenant, ticket_tailor_order_id)
@@ -483,7 +570,7 @@ async def admin_confirm_tenant_ticket_tailor_payment(
 
 @app.post("/admin/expire-overdue-orders")
 async def admin_expire_overdue_orders(
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
     tenant_id: str | None = Query(default=None),
     expiration_hours: float | None = Query(default=None),
     batch_size: int | None = Query(default=None),
@@ -492,6 +579,8 @@ async def admin_expire_overdue_orders(
         normalized_tenant_id = normalize_tenant_id(tenant_id) if tenant_id else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not admin_auth.is_privileged(user, settings):
+        normalized_tenant_id = scoped_tenant_id(user, normalized_tenant_id)
     return await service.expire_overdue_orders(
         tenant_id=normalized_tenant_id,
         expiration_hours=expiration_hours,
@@ -503,16 +592,16 @@ async def admin_expire_overdue_orders(
 async def admin_create_default_nicky_webhook(
     url: str | None = None, _: None = Depends(require_admin)
 ) -> dict[str, Any]:
-    tenant = get_tenant_or_404(settings.default_tenant_id)
-    return await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant, url))
+    raise HTTPException(status_code=404, detail="Tenant id is required")
 
 
 @app.post("/admin/tenants/{tenant_id}/nicky/webhooks")
 async def admin_create_tenant_nicky_webhook(
     tenant_id: str,
     url: str | None = None,
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
+    require_admin_role(user)
     tenant = get_tenant_or_404(tenant_id)
     return await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant, url))
 
@@ -521,14 +610,14 @@ async def admin_create_tenant_nicky_webhook(
 async def admin_test_default_nicky_status_change(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    tenant = get_tenant_or_404(settings.default_tenant_id)
-    return await nicky_client.test_status_change_webhook(tenant)
+    raise HTTPException(status_code=404, detail="Tenant id is required")
 
 
 @app.post("/admin/tenants/{tenant_id}/nicky/webhooks/test-status-change")
 async def admin_test_tenant_nicky_status_change(
     tenant_id: str,
-    _: None = Depends(require_admin),
+    user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
+    require_admin_role(user)
     tenant = get_tenant_or_404(tenant_id)
     return await nicky_client.test_status_change_webhook(tenant)

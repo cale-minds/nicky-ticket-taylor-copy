@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from typing import Any
 
 from app.config import Settings
 from app.db import Database
-from app.extractors import extract_issued_ticket_ids, extract_order, has_payment_keyword
+from app.extractors import extract_issued_ticket_ids, extract_order
 from app.nicky import NickyClient
 from app.tenants import TenantConfig
 from app.ticket_tailor import TicketTailorClient
@@ -59,20 +60,6 @@ class IntegrationService:
             if not order["ticket_tailor_order_id"]:
                 raise ValueError("Could not identify Ticket Tailor order id")
 
-            is_nicky_order = has_payment_keyword(
-                payload, tenant.ticket_tailor_offline_payment_keywords
-            )
-            if not is_nicky_order:
-                self.db.mark_webhook_event(
-                    tenant.tenant_id, "ticket_tailor", webhook_id, "ignored"
-                )
-                return {
-                    "status": "ignored",
-                    "reason": "payment method does not match configured Nicky keywords",
-                    "tenant_id": tenant.tenant_id,
-                    "order_id": order["ticket_tailor_order_id"],
-                }
-
             self.db.upsert_order(tenant.tenant_id, order, payload)
             self.db.log(
                 tenant.tenant_id,
@@ -84,11 +71,7 @@ class IntegrationService:
 
             created_payment_request = None
             row = self.db.get_order(tenant.tenant_id, order["ticket_tailor_order_id"])
-            if (
-                tenant.auto_create_nicky_payment_request
-                and row
-                and not row["nicky_payment_request_id"]
-            ):
+            if row and not row["nicky_payment_request_id"]:
                 created_payment_request = await self.create_nicky_payment_request(
                     tenant, order["ticket_tailor_order_id"]
                 )
@@ -151,10 +134,7 @@ class IntegrationService:
             confirmed = None
             voided = None
             if self._is_paid(new_status):
-                if (
-                    tenant.auto_confirm_ticket_tailor_payments
-                    and not row["ticket_tailor_tickets_voided_at"]
-                ):
+                if not row["ticket_tailor_tickets_voided_at"]:
                     confirmed = await self.confirm_ticket_tailor_payment(tenant, order_id)
             elif not row["ticket_tailor_confirmed_at"]:
                 voided = await self.void_ticket_tailor_tickets(
@@ -207,11 +187,6 @@ class IntegrationService:
             "Nicky payment request created",
             payment_request,
         )
-        simulated_webhook_result = None
-        if tenant.skip_nicky:
-            simulated_webhook_result = await self._simulate_nicky_finished_webhook(
-                tenant, payment_request_id
-            )
         return {
             "tenant_id": tenant.tenant_id,
             "id": payment_request_id,
@@ -219,7 +194,6 @@ class IntegrationService:
             "receiver_short_id": receiver_short_id,
             "payment_url": payment_url,
             "status": status,
-            "simulated_nicky_webhook": simulated_webhook_result,
         }
 
     async def confirm_ticket_tailor_payment(
@@ -447,26 +421,6 @@ class IntegrationService:
             f"{receiver_short_id}?paymentId={bill_short_id}"
         )
 
-    async def _simulate_nicky_finished_webhook(
-        self, tenant: TenantConfig, payment_request_id: str
-    ) -> dict[str, Any] | None:
-        if not payment_request_id:
-            return None
-        event = {
-            "webHookId": f"skip-nicky-{tenant.tenant_id}",
-            "webHookType": "PaymentRequest_StatusChanged",
-            "itemId": payment_request_id,
-            "data": {
-                "previousStatus": "PaymentPending",
-                "newStatus": "Finished",
-            },
-            "simulated": True,
-        }
-        raw_body = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode(
-            "utf-8"
-        )
-        return await self.process_nicky_webhook(tenant, event, raw_body)
-
     @staticmethod
     def _nicky_event_id(event: dict[str, Any]) -> str:
         pieces = [
@@ -510,7 +464,9 @@ class IntegrationService:
 
     @staticmethod
     def _is_paid(status: str) -> bool:
-        return status.strip().lower() == FINISHED_NICKY_STATUS
+        normalized = unicodedata.normalize("NFKD", status.strip().lower())
+        ascii_status = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        return ascii_status in {FINISHED_NICKY_STATUS, "concluido"}
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
