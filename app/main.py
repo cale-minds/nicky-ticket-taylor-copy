@@ -574,8 +574,9 @@ async def admin_delete_tenant(
     tenant_id: str,
     user: admin_auth.AdminUser = Depends(require_admin),
 ) -> dict[str, Any]:
-    require_admin_role(user)
-    tenant = get_tenant_or_404(tenant_id)
+    require_writer(user)
+    scoped = scoped_tenant_id(user, normalize_tenant_id(tenant_id))
+    tenant = get_tenant_or_404(scoped or tenant_id)
     db.deactivate_tenant(tenant.tenant_id)
     return {"status": "deactivated", "tenant_id": tenant.tenant_id}
 

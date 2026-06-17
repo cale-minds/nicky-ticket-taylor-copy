@@ -174,6 +174,7 @@ def seed_tenant(
     active: bool = True,
     nicky_api_key: str = "existing_nicky_key",
     ticket_tailor_api_key: str = "existing_tt_key",
+    owner_auth_subject: str = "",
 ) -> None:
     tenant = replace(
         tenant_from_settings(client.app.state.settings, tenant_id),
@@ -181,6 +182,7 @@ def seed_tenant(
         nicky_api_key=nicky_api_key,
         ticket_tailor_api_key=ticket_tailor_api_key,
         nicky_default_blockchain_asset_id="USD.USD",
+        owner_auth_subject=owner_auth_subject,
     )
     client.app.state.db.upsert_tenant(tenant)
 
@@ -281,7 +283,7 @@ def test_wildcard_allowed_roles_keeps_common_user_in_scoped_view(tmp_path) -> No
     assert response.status_code == 200
     assert ">User<" in response.text
     assert ">Admin<" not in response.text
-    assert 'href="/admin-ui/tenants/new"' not in response.text
+    assert 'href="/admin-ui/tenants/new"' in response.text
     assert "All tenants" not in response.text
 
 
@@ -291,8 +293,8 @@ def test_new_tenant_form_keeps_derived_fields_out_of_identity(tmp_path) -> None:
 
     response = client.get("/admin-ui/tenants/new")
     html = response.text
-    identity_block = html[html.index(">Identity<") : html.index(">Ticket Tailor<")]
-    nicky_block = html[html.index(">Nicky<") :]
+    identity_block = html[html.index(">Tenant<") : html.index(">Nicky<")]
+    nicky_block = html[html.index(">Nicky<") : html.index(">Ticket Tailor<")]
 
     assert response.status_code == 200
     assert "Name" in identity_block
@@ -334,15 +336,46 @@ def test_existing_tenant_form_shows_final_ticket_tailor_webhook_url(tmp_path) ->
 
     response = client.get("/admin-ui/tenants/demo-tenant/edit")
     html = response.text
-    identity_block = html[html.index(">Identity<") : html.index(">Ticket Tailor<")]
-    ticket_tailor_block = html[html.index(">Ticket Tailor<") : html.index(">Nicky<")]
+    identity_block = html[html.index(">Tenant<") : html.index(">Nicky<")]
+    ticket_tailor_block = html[html.index(">Ticket Tailor<") :]
 
     assert response.status_code == 200
     assert "Tenant UUID" in identity_block
     assert "Ticket Tailor webhook" in ticket_tailor_block
-    assert "Settings &gt; Webhooks" in ticket_tailor_block
+    assert "Settings &gt; API &gt; WebHook" in ticket_tailor_block
     assert 'id="copy-ticket-tailor-webhook-url"' in ticket_tailor_block
     assert "http://localhost:4200/webhooks/ticket-tailor/demo-tenant" in ticket_tailor_block
+
+
+def test_common_user_can_deactivate_owned_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path, admin_allowed_roles=["Admin"])
+    seed_tenant(client, "owned-tenant", owner_auth_subject="auth0|common")
+    authenticate_common_user_without_nicky_claim(client)
+
+    edit_response = client.get("/admin-ui/tenants/owned-tenant/edit")
+    response = client.post(
+        "/admin-ui/tenants/owned-tenant/delete",
+        follow_redirects=False,
+    )
+    tenant = client.app.state.db.get_tenant("owned-tenant")
+
+    assert edit_response.status_code == 200
+    assert "Deactivate tenant" in edit_response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/tenants"
+    assert tenant is not None
+    assert tenant.active is False
+
+
+def test_common_user_cannot_deactivate_other_users_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path, admin_allowed_roles=["Admin"])
+    seed_tenant(client, "other-tenant", owner_auth_subject="auth0|other")
+    authenticate_common_user_without_nicky_claim(client)
+
+    response = client.post("/admin-ui/tenants/other-tenant/delete")
+
+    assert response.status_code == 403
+    assert client.app.state.db.get_tenant("other-tenant").active is True
 
 
 def test_new_tenant_save_derives_tenant_uuid_from_nicky_validation(tmp_path) -> None:

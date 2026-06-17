@@ -173,7 +173,7 @@ def create_admin_ui_router(
         </section>
         {summary_grid(tenants, orders, webhooks)}
         <section class="mb-7 min-w-0">
-          <h2 class="mb-3 text-lg font-semibold text-slate-950">Core tenant mapping</h2>
+          <h2 class="mb-3 text-lg font-semibold text-slate-950">Customer connections</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {tenant_table(dashboard_tenants, user=user, settings=settings, framed=False)}
             {pagination_controls(tenants_page_number, DASHBOARD_PAGE_SIZE, tenants_total, "/overview", request.query_params, "tenants_page")}
@@ -225,8 +225,8 @@ def create_admin_ui_router(
         body = f"""
         <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 class="text-2xl font-semibold leading-8 text-slate-950">Core tenant mapping</h1>
-            <p class="mt-2 text-sm text-slate-500">Map each Ticket Tailor account to the Nicky account that receives payments.</p>
+            <h1 class="text-2xl font-semibold leading-8 text-slate-950">Customer connections</h1>
+            <p class="mt-2 text-sm text-slate-500">Manage each customer's Ticket Tailor connection, Nicky payment account, and webhook setup.</p>
           </div>
           {new_tenant_link(user, tenants, settings)}
         </section>
@@ -402,9 +402,10 @@ def create_admin_ui_router(
     async def delete_tenant(
         tenant_id: str, user: admin_auth.AdminUser = Depends(require_admin_web)
     ):
-        if not admin_auth.is_admin(user, settings):
-            raise HTTPException(status_code=403, detail="Admin role required")
+        if not can_write_tenants(user, settings):
+            raise HTTPException(status_code=403, detail="Support access is read-only")
         tenant = get_tenant_or_404(db, tenant_id)
+        require_tenant_visible(user, settings, tenant)
         db.deactivate_tenant(tenant.tenant_id)
         return RedirectResponse("/admin-ui/tenants", status_code=303)
 
@@ -728,8 +729,6 @@ def scoped_webhook_filters(
 def new_tenant_link(user: admin_auth.AdminUser, tenants: list[TenantConfig], settings: Settings) -> str:
     if not can_write_tenants(user, settings):
         return ""
-    if not admin_auth.is_admin(user, settings) and tenants:
-        return ""
     return '<a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/tenants/new">New tenant</a>'
 
 
@@ -836,7 +835,7 @@ def tenant_form(
     elif message:
         notice = f'<p class="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">{e(message.replace("_", " ").capitalize())}.</p>'
     delete_action = ""
-    if not is_new and admin_auth.is_admin(user, settings):
+    if not is_new and can_write_tenants(user, settings):
         delete_action = f"""
         <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/delete">
           <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">Deactivate tenant</button>
@@ -875,14 +874,12 @@ def tenant_form(
     tenant_uuid_block = ""
     if not is_new:
         tenant_uuid_block = f"""
-          <div class="mt-5 border-t border-slate-100 pt-5">
-            {text_input("Tenant UUID", "", value=tenant.tenant_id, readonly=True)}
-          </div>
+          {text_input("Tenant UUID", "", value=tenant.tenant_id, readonly=True)}
         """
         webhook_block = f"""
         <div class="mt-5 border-t border-slate-100 pt-5">
           <h3 class="text-sm font-semibold text-slate-950">Ticket Tailor webhook</h3>
-          <p class="mt-1 text-sm leading-6 text-slate-500">Copy this microservice webhook URL and configure it in Ticket Tailor under Settings &gt; Webhooks.</p>
+          <p class="mt-1 text-sm leading-6 text-slate-500">Copy this microservice webhook URL and configure it in Ticket Tailor under Settings &gt; API &gt; WebHook.</p>
           <div class="mt-3 flex min-w-0 flex-col gap-3 sm:flex-row">
             <input id="ticket-tailor-webhook-url" class="h-11 min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 shadow-sm outline-none" type="text" value="{e(tt_webhook)}" readonly>
             <button id="copy-ticket-tailor-webhook-url" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" type="button">Copy</button>
@@ -901,18 +898,45 @@ def tenant_form(
       <div class="flex flex-wrap gap-3">
         {delete_action}
         <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{back_label}</a>
+        <button id="save-tenant-button" class="inline-flex h-10 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" form="tenant-form" disabled>{save_label}</button>
       </div>
     </section>
     {notice}
-    <form method="post" action="/admin-ui/tenants/save" class="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(280px,0.72fr)_minmax(0,1fr)]">
+    <form id="tenant-form" method="post" action="/admin-ui/tenants/save" class="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-5">
       {hidden_tenant_id}
-      <div class="min-w-0 space-y-5">
-        <section class="min-w-0 rounded-lg border border-slate-100 bg-white p-5 shadow-nicky">
-          <h2 class="mb-5 text-lg font-semibold text-slate-950">Identity</h2>
-          {text_input("Name", "name", value=tenant.name if not is_new else "")}
-          {tenant_uuid_block}
-        </section>
-        <section class="min-w-0 rounded-lg border border-slate-100 bg-white p-5 shadow-nicky">
+      <section class="min-w-0 rounded-lg border border-slate-100 bg-white p-5 shadow-nicky">
+        <div class="min-w-0">
+          <h2 class="mb-5 text-lg font-semibold text-slate-950">Tenant</h2>
+          <div class="space-y-5">
+            {text_input("Name", "name", value=tenant.name if not is_new else "")}
+            {tenant_uuid_block}
+          </div>
+        </div>
+        <div class="mt-6 min-w-0 border-t border-slate-100 pt-6">
+          <h2 class="mb-5 text-lg font-semibold text-slate-950">Nicky</h2>
+          <label class="mb-4 block min-w-0 text-sm font-semibold text-slate-950">
+            API key
+            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
+                <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none disabled:bg-slate-50" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="off">
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="Show Nicky API key" title="Show API key">Show</button>
+              </div>
+              <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">Validate</button>
+            </div>
+          </label>
+          <p id="nicky-validation-status" class="mb-5 min-h-5 text-sm text-slate-500"></p>
+          <div class="mb-5 min-w-0">
+            <label class="block min-w-0 text-sm font-semibold text-slate-950">
+              Nicky email
+              <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}"{nicky_identity_readonly}>
+            </label>
+          </div>
+          <label class="block min-w-0 text-sm font-semibold text-slate-950">
+            Asset
+            <select id="nicky-asset" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="nicky_default_blockchain_asset_id" required>{asset_option}</select>
+          </label>
+        </div>
+        <div class="mt-6 min-w-0 border-t border-slate-100 pt-6">
           <h2 class="mb-5 text-lg font-semibold text-slate-950">Ticket Tailor</h2>
           <label class="block min-w-0 text-sm font-semibold text-slate-950">
             API key
@@ -926,35 +950,8 @@ def tenant_form(
           </label>
           <p id="ticket-tailor-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
           {webhook_block}
-        </section>
-      </div>
-      <section class="min-w-0 rounded-lg border border-slate-100 bg-white p-5 shadow-nicky">
-        <h2 class="mb-5 text-lg font-semibold text-slate-950">Nicky</h2>
-        <label class="mb-4 block min-w-0 text-sm font-semibold text-slate-950">
-          API key
-          <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
-            <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
-              <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none disabled:bg-slate-50" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="off">
-              <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="Show Nicky API key" title="Show API key">Show</button>
-            </div>
-            <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">Validate</button>
-          </div>
-        </label>
-        <p id="nicky-validation-status" class="mb-5 min-h-5 text-sm text-slate-500"></p>
-        <div class="mb-5 min-w-0">
-          <label class="block min-w-0 text-sm font-semibold text-slate-950">
-            Nicky email
-            <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}"{nicky_identity_readonly}>
-          </label>
         </div>
-        <label class="mb-2 block min-w-0 text-sm font-semibold text-slate-950">
-          Asset
-          <select id="nicky-asset" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="nicky_default_blockchain_asset_id" required>{asset_option}</select>
-        </label>
       </section>
-      <div class="flex justify-end lg:col-span-2">
-        <button id="save-tenant-button" class="inline-flex h-11 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" disabled>{save_label}</button>
-      </div>
     </form>
     <script>
       const tenantForm = document.querySelector('form[action="/admin-ui/tenants/save"]');
