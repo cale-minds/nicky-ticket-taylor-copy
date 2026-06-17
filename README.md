@@ -45,13 +45,13 @@ uvicorn app.main:app --reload --port 8017
 Health check:
 
 ```powershell
-Invoke-RestMethod http://localhost:8017/health
+Invoke-RestMethod http://localhost:8017/api/health
 ```
 
 API docs:
 
 ```text
-http://localhost:8017/docs
+http://localhost:8017/api/docs
 ```
 
 ## Environment
@@ -60,6 +60,8 @@ Important variables in `.env`:
 
 ```dotenv
 APP_BASE_URL=http://localhost:8017
+API_BASE_PATH=/api
+ADMIN_API_BASE_PATH=/api
 DATABASE_PATH=./data/integration.sqlite3
 ADMIN_SESSION_SECRET=change-this-in-production
 ADMIN_SESSION_MAX_AGE_SECONDS=28800
@@ -81,6 +83,51 @@ https://pay.nicky.me/payment-report/{receiverShortId}?paymentId={bill.shortId}
 ```
 
 The current Nicky public API authenticates public-account operations with `X-API-KEY`. The webhook type for payment-request status changes is `PaymentRequest_StatusChanged`, enum value `2`.
+
+## Vercel Deploy
+
+The Vercel deployment is configured by `vercel.json` to expose:
+
+```text
+/                -> Admin UI
+/admin-ui...     -> Admin UI routes and Auth0 callback
+/api/...         -> FastAPI endpoints, webhooks, health check, and API docs
+```
+
+Do not rewrite every path to FastAPI. Routes such as `/docs`, `/openapi.json`, `/health`, `/admin/...`, and `/webhooks/...` should not be public at the domain root.
+
+Set these Vercel environment variables:
+
+```dotenv
+APP_ENV=production
+APP_BASE_URL=https://nicky-ticket-taylor.vercel.app
+API_BASE_PATH=/api
+ADMIN_API_BASE_PATH=/api
+AUTH0_CALLBACK_PATH=/admin-ui/callback
+AUTH0_DOMAIN=your-tenant.region.auth0.com
+AUTH0_CLIENT_ID=...
+AUTH0_CLIENT_SECRET=
+AUTH0_AUDIENCE=
+ADMIN_ALLOWED_ROLES=Admin
+ADMIN_SESSION_SECRET=choose-a-long-random-session-secret
+```
+
+Keep real Ticket Tailor and Nicky credentials in Vercel environment variables or in tenant records created through the Admin UI. The deploy does not use fake or mocked integrations.
+
+Add this callback URL to the Auth0 application:
+
+```text
+https://nicky-ticket-taylor.vercel.app/admin-ui/callback
+```
+
+FastAPI endpoints remain available under `/api`, for example:
+
+```text
+https://nicky-ticket-taylor.vercel.app/api/health
+https://nicky-ticket-taylor.vercel.app/api/webhooks/ticket-tailor/{tenant_id}
+https://nicky-ticket-taylor.vercel.app/api/webhooks/nicky/{tenant_id}
+https://nicky-ticket-taylor.vercel.app/api/docs
+```
 
 ## Admin Web Console
 

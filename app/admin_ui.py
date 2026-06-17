@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app import admin_auth
-from app.config import Settings
+from app.config import Settings, external_api_url
 from app.db import Database
 from app.nicky import NickyApiError, NickyClient
 from app.service import IntegrationService, row_to_dict
@@ -123,6 +123,7 @@ def create_admin_ui_router(
             return RedirectResponse(admin_auth.build_auth0_logout_url(settings), status_code=303)
         return RedirectResponse("/admin-ui/login", status_code=303)
 
+    @router.get("/", response_class=HTMLResponse)
     @router.get("/admin-ui", response_class=HTMLResponse)
     @router.get("/admin-ui/", response_class=HTMLResponse)
     async def dashboard(
@@ -587,7 +588,7 @@ def page(
             ("Dashboard", "/admin-ui"),
             ("Tenants", "/admin-ui/tenants"),
             ("Orders", "/admin-ui/orders"),
-            ("API docs", "/docs"),
+            ("API docs", f"{settings.api_base_path}/docs"),
         ]
     )
     return f"""<!doctype html>
@@ -828,7 +829,7 @@ def tenant_form(
     saved: bool = False,
     message: str | None = None,
 ) -> str:
-    tt_webhook = f"{settings.app_base_url}/webhooks/ticket-tailor/{tenant.tenant_id}"
+    tt_webhook = external_api_url(settings, f"/webhooks/ticket-tailor/{tenant.tenant_id}")
     notice = ""
     if saved:
         notice = '<p class="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">Tenant saved.</p>'
@@ -1060,7 +1061,7 @@ def tenant_form(
         nickyValidateButton.disabled = true;
         setStatus(nickyStatusEl, "Validating...", "idle");
         try {{
-          const response = await fetch("/admin/nicky/validate-api-key", {{
+          const response = await fetch("{e(settings.admin_api_base_path)}/admin/nicky/validate-api-key", {{
             method: "POST",
             headers: {{ "Content-Type": "application/json" }},
             body: JSON.stringify({{ nicky_api_key: apiKey }})
@@ -1098,7 +1099,7 @@ def tenant_form(
         ticketTailorValidateButton.disabled = true;
         setStatus(ticketTailorStatusEl, "Validating...", "idle");
         try {{
-          const response = await fetch("/admin/ticket-tailor/validate-api-key", {{
+          const response = await fetch("{e(settings.admin_api_base_path)}/admin/ticket-tailor/validate-api-key", {{
             method: "POST",
             headers: {{ "Content-Type": "application/json" }},
             body: JSON.stringify({{ ticket_tailor_api_key: apiKey }})
@@ -1706,7 +1707,7 @@ def link_or_text(value: Any) -> str:
 
 
 def build_nicky_webhook_url(settings: Settings, tenant: TenantConfig) -> str:
-    url = f"{settings.app_base_url}/webhooks/nicky/{tenant.tenant_id}"
+    url = external_api_url(settings, f"/webhooks/nicky/{tenant.tenant_id}")
     if tenant.nicky_webhook_token:
         url = f"{url}?token={urllib.parse.quote(tenant.nicky_webhook_token)}"
     return url

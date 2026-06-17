@@ -206,6 +206,15 @@ def test_admin_ui_redirects_to_login_when_session_is_missing(tmp_path) -> None:
     )
 
 
+def test_root_redirects_to_login_when_session_is_missing(tmp_path) -> None:
+    client = build_test_client(tmp_path)
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/login?return_to=%2F"
+
+
 def test_admin_ui_auth0_login_redirects_to_universal_login(tmp_path) -> None:
     client = build_test_client(
         tmp_path,
@@ -344,7 +353,7 @@ def test_existing_tenant_form_shows_final_ticket_tailor_webhook_url(tmp_path) ->
     assert "Ticket Tailor webhook" in ticket_tailor_block
     assert "Settings &gt; API &gt; WebHook" in ticket_tailor_block
     assert 'id="copy-ticket-tailor-webhook-url"' in ticket_tailor_block
-    assert "http://localhost:4200/webhooks/ticket-tailor/demo-tenant" in ticket_tailor_block
+    assert "http://localhost:4200/api/webhooks/ticket-tailor/demo-tenant" in ticket_tailor_block
 
 
 def test_common_user_can_deactivate_owned_tenant(tmp_path) -> None:

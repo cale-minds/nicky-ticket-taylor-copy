@@ -42,10 +42,21 @@ def _csv_env(name: str, default: list[str]) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _path_env(name: str, default: str) -> str:
+    raw = os.getenv(name, default).strip()
+    if not raw or raw == "/":
+        return ""
+    return raw if raw.startswith("/") else f"/{raw}"
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     app_base_url: str = os.getenv("APP_BASE_URL", "http://localhost:8017").rstrip("/")
+    api_base_path: str = _path_env("API_BASE_PATH", "/api")
+    admin_api_base_path: str = _path_env(
+        "ADMIN_API_BASE_PATH", os.getenv("API_BASE_PATH", "/api")
+    )
     database_path: Path = Path(os.getenv("DATABASE_PATH", "./data/integration.sqlite3"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
@@ -100,3 +111,8 @@ class Settings:
 
 def get_settings() -> Settings:
     return Settings()
+
+
+def external_api_url(settings: Settings, path: str) -> str:
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return f"{settings.app_base_url}{settings.api_base_path}{normalized_path}"

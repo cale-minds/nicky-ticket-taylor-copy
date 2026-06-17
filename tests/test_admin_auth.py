@@ -1,7 +1,7 @@
 import time
 
 from app import admin_auth
-from app.config import Settings
+from app.config import Settings, external_api_url
 
 
 def test_extract_roles_from_auth0_array_and_namespaced_claims() -> None:
@@ -132,3 +132,15 @@ def test_safe_return_to_rejects_external_urls() -> None:
     )
     assert admin_auth.safe_return_to(settings, "https://evil.example.com") == "/admin-ui"
     assert admin_auth.safe_return_to(settings, "//evil.example.com") == "/admin-ui"
+
+
+def test_external_api_url_uses_configured_api_base_path() -> None:
+    settings = Settings(
+        app_base_url="https://nicky-ticket-taylor.vercel.app",
+        api_base_path="/api",
+    )
+
+    assert (
+        external_api_url(settings, "/webhooks/nicky/tenant-1")
+        == "https://nicky-ticket-taylor.vercel.app/api/webhooks/nicky/tenant-1"
+    )

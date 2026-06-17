@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, external_api_url
 from app.tenants import NICKY_WEBHOOK_TYPE, TenantConfig
 
 
@@ -169,12 +169,12 @@ class NickyClient:
     def _success_url(self, tenant: TenantConfig) -> str | None:
         if self.settings.nicky_success_url:
             return self.settings.nicky_success_url
-        return f"{self.settings.app_base_url}/nicky/success?tenant_id={tenant.tenant_id}"
+        return external_api_url(self.settings, f"/nicky/success?tenant_id={tenant.tenant_id}")
 
     def _cancel_url(self, tenant: TenantConfig) -> str | None:
         if self.settings.nicky_cancel_url:
             return self.settings.nicky_cancel_url
-        return f"{self.settings.app_base_url}/nicky/cancel?tenant_id={tenant.tenant_id}"
+        return external_api_url(self.settings, f"/nicky/cancel?tenant_id={tenant.tenant_id}")
 
     @staticmethod
     def _native_amount(order: dict[str, Any]) -> str:

@@ -8,13 +8,15 @@ from dataclasses import replace
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import admin_auth
 from app.admin_ui import create_admin_ui_router
-from app.config import Settings, get_settings
+from app.config import Settings, external_api_url, get_settings
 from app.db import Database
 from app.nicky import NickyApiError, NickyClient
 from app.security import SignatureError, verify_ticket_tailor_signature
@@ -91,6 +93,9 @@ app = FastAPI(
     title="Nicky Ticket Tailor Integration",
     version="0.2.0",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 app.add_middleware(
     SessionMiddleware,
@@ -99,6 +104,23 @@ app.add_middleware(
     https_only=settings.app_base_url.startswith("https://"),
     max_age=settings.admin_session_max_age_seconds,
 )
+
+
+@app.middleware("http")
+async def api_base_path_middleware(request: Request, call_next):
+    api_base_path = settings.api_base_path
+    if api_base_path and (
+        request.scope["path"] == api_base_path
+        or request.scope["path"].startswith(f"{api_base_path}/")
+    ):
+        stripped_path = request.scope["path"][len(api_base_path) :] or "/"
+        if stripped_path == "/":
+            stripped_path = "/health"
+        elif stripped_path.startswith(("/admin-ui", "/overview", "/authentication/login-callback")):
+            stripped_path = "/__not_found__"
+        request.scope["path"] = stripped_path
+        request.scope["root_path"] = request.scope.get("root_path", "") + api_base_path
+    return await call_next(request)
 
 
 def model_data(model: BaseModel) -> dict[str, Any]:
@@ -323,11 +345,28 @@ def require_nicky_token(
 
 
 def nicky_webhook_url(tenant: TenantConfig, url: str | None = None) -> str:
-    webhook_url = url or f"{settings.app_base_url}/webhooks/nicky/{tenant.tenant_id}"
+    webhook_url = url or external_api_url(settings, f"/webhooks/nicky/{tenant.tenant_id}")
     if tenant.nicky_webhook_token and "token=" not in webhook_url:
         separator = "&" if "?" in webhook_url else "?"
         webhook_url = f"{webhook_url}{separator}token={tenant.nicky_webhook_token}"
     return webhook_url
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs(request: Request):
+    if request.scope.get("root_path") != settings.api_base_path:
+        raise HTTPException(status_code=404, detail="Not found")
+    return get_swagger_ui_html(
+        openapi_url=f"{settings.api_base_path}/openapi.json",
+        title=f"{app.title} - Swagger UI",
+    )
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(request: Request):
+    if request.scope.get("root_path") != settings.api_base_path:
+        raise HTTPException(status_code=404, detail="Not found")
+    return get_openapi(title=app.title, version=app.version, routes=app.routes)
 
 
 async def parse_json_body(request: Request) -> tuple[bytes, dict[str, Any]]:
