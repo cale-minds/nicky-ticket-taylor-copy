@@ -12,7 +12,8 @@ AUTH0_DOMAIN="${AUTH0_DOMAIN:-dev-eq0ptfwdhb1s1h12.us.auth0.com}"
 AUTH0_CLIENT_ID="${AUTH0_CLIENT_ID:-SqrJq2fxJ6adrOFaR24oh9COF4vZwqba}"
 AUTH0_AUDIENCE="${AUTH0_AUDIENCE:-https://nicky-tech.azurewebsites.net}"
 AUTH0_CLIENT_SECRET="${AUTH0_CLIENT_SECRET:-}"
-ADMIN_ALLOWED_ROLES="${ADMIN_ALLOWED_ROLES:-*}"
+ADMIN_ALLOWED_ROLES="${ADMIN_ALLOWED_ROLES:-Admin}"
+NICKY_API_BASE_URL="${NICKY_API_BASE_URL:-https://api-public.dev.pay.nicky.me}"
 
 if [[ -z "${FASTAPI_EXE:-}" ]]; then
   if [[ -x "$ROOT/.venv/bin/python" ]]; then
@@ -29,6 +30,7 @@ export AUTH0_CLIENT_ID
 export AUTH0_AUDIENCE
 export AUTH0_CLIENT_SECRET
 export ADMIN_ALLOWED_ROLES
+export NICKY_API_BASE_URL
 
 cat <<EOF
 Starting Nicky Ticket Tailor service in Auth0 local compatibility mode.
@@ -41,6 +43,9 @@ $APP_BASE_URL$AUTH0_CALLBACK_PATH
 
 Allowed roles:
 $ADMIN_ALLOWED_ROLES
+
+Nicky API:
+$NICKY_API_BASE_URL
 
 Health:
 $APP_BASE_URL/health

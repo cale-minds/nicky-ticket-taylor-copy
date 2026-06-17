@@ -70,7 +70,6 @@ AUTH0_AUDIENCE=
 AUTH0_CALLBACK_PATH=/admin-ui/callback
 ADMIN_ALLOWED_ROLES=Admin
 
-TICKET_TAILOR_API_BASE_URL=https://api.tickettailor.com
 NICKY_API_BASE_URL=https://api-public.pay.nicky.me
 NICKY_PAY_BASE_URL=https://pay.nicky.me
 ```
@@ -98,20 +97,6 @@ The dashboard is built for the same multi-tenant model used by the API:
 ```text
 tenant_id | ticket_tailor_api_key | nicky_api_key | nicky_default_blockchain_asset_id
 ```
-
-### Local Admin Token Login
-
-For local development or controlled test environments, set:
-
-```dotenv
-ADMIN_TOKEN=choose-a-local-admin-token
-ADMIN_SESSION_SECRET=choose-a-long-random-session-secret
-ADMIN_SESSION_MAX_AGE_SECONDS=28800
-```
-
-Then open `/admin-ui/login` and paste the admin token. The same token still works for API calls through the `X-Admin-Token` header.
-
-When neither `ADMIN_TOKEN` nor Auth0 is configured, admin API routes are open for development. Production deployments should always configure either `ADMIN_TOKEN` or Auth0.
 
 ### Auth0 Login
 
@@ -184,7 +169,7 @@ AUTH0_CLIENT_ID=SqrJq2fxJ6adrOFaR24oh9COF4vZwqba
 AUTH0_AUDIENCE=https://nicky-tech.azurewebsites.net
 ```
 
-It also defaults to `ADMIN_ALLOWED_ROLES=*` so any successfully authenticated Auth0 user can enter the local admin console during this compatibility test. For shared environments, public tunnel, or production testing, keep role checks enabled with values such as `ADMIN_ALLOWED_ROLES=Admin` and use the generated service callback URL instead, usually `https://YOUR_PUBLIC_URL/admin-ui/callback`.
+It defaults to `ADMIN_ALLOWED_ROLES=Admin`. Successfully authenticated users without an admin or support role can still enter the console as common users, but they remain scoped to their own Nicky UUID and do not get the admin-wide view. `ADMIN_ALLOWED_ROLES=*` may be used only as an authentication allow-list shortcut; it does not grant admin privileges.
 
 The implementation accepts signed Auth0 sessions in the browser and bearer tokens for admin API calls. Browser sessions use `ADMIN_SESSION_MAX_AGE_SECONDS`; Auth0 sessions are also rejected when the token `exp` claim is expired. It extracts roles from common Auth0 role/permission claims, including namespaced claims. Roles matching `ADMIN_ALLOWED_ROLES` are admins, `Support` is read-only, and users without those roles are common users scoped to their own Nicky UUID.
 
@@ -223,7 +208,7 @@ Equivalent HTTP admin endpoint:
 
 ```powershell
 Invoke-RestMethod -Method Post http://localhost:8017/admin/tenants `
-  -Headers @{ "X-Admin-Token" = "..." } `
+  -Headers @{ Authorization = "Bearer ..." } `
   -ContentType "application/json" `
   -Body '{
     "tenant_id": "{nicky_user_uuid}",
@@ -523,20 +508,20 @@ For Auth0, add the printed `Auth0 callback URL` to the Auth0 application's allow
 
 ## Manual Operations
 
-If `ADMIN_TOKEN` is set, pass it as `X-Admin-Token`.
+Manual API operations require an Auth0 bearer token.
 
 ```powershell
 # List tenants
-Invoke-RestMethod http://localhost:8017/admin/tenants -Headers @{ "X-Admin-Token" = "..." }
+Invoke-RestMethod http://localhost:8017/admin/tenants -Headers @{ Authorization = "Bearer ..." }
 
 # List captured orders for one tenant
-Invoke-RestMethod "http://localhost:8017/orders?tenant_id={tenant_uuid}" -Headers @{ "X-Admin-Token" = "..." }
+Invoke-RestMethod "http://localhost:8017/orders?tenant_id={tenant_uuid}" -Headers @{ Authorization = "Bearer ..." }
 
 # Create/recreate a Nicky payment request for a tenant order
-Invoke-RestMethod -Method Post http://localhost:8017/admin/tenants/{tenant_uuid}/orders/or_123/create-nicky-payment-request -Headers @{ "X-Admin-Token" = "..." }
+Invoke-RestMethod -Method Post http://localhost:8017/admin/tenants/{tenant_uuid}/orders/or_123/create-nicky-payment-request -Headers @{ Authorization = "Bearer ..." }
 
 # Confirm Ticket Tailor offline payment manually through the service
-Invoke-RestMethod -Method Post http://localhost:8017/admin/tenants/{tenant_uuid}/orders/or_123/confirm-ticket-tailor-payment -Headers @{ "X-Admin-Token" = "..." }
+Invoke-RestMethod -Method Post http://localhost:8017/admin/tenants/{tenant_uuid}/orders/or_123/confirm-ticket-tailor-payment -Headers @{ Authorization = "Bearer ..." }
 ```
 
 ## References

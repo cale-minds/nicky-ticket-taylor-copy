@@ -1,25 +1,77 @@
+import base64
+import base64
+import json
+from dataclasses import replace
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from itsdangerous import TimestampSigner
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import admin_auth
 from app.admin_ui import create_admin_ui_router
 from app.config import Settings
 from app.db import Database
-from app.nicky import NickyClient
+from app.nicky import NickyApiError, NickyClient
 from app.service import IntegrationService
 from app.tenants import tenant_from_settings
 from app.ticket_tailor import TicketTailorClient
 
 
-def build_test_client(tmp_path, **settings_overrides) -> TestClient:
+class FakeAdminNickyClient(NickyClient):
+    async def validate_api_key(self, nicky_api_key: str) -> dict:
+        return {
+            "nicky_user_uuid": "uuid-from-nicky",
+            "nicky_user_short_id": "NICKY01",
+            "assets": [{"id": "USD.USD", "name": "USD"}],
+        }
+
+    async def create_webhook(self, tenant, url: str) -> dict:
+        return {"status": "created", "tenant_id": tenant.tenant_id, "url": url}
+
+
+class FakeCommonUserNickyClient(FakeAdminNickyClient):
+    async def validate_api_key(self, nicky_api_key: str) -> dict:
+        return {
+            "nicky_user_uuid": "uuid-from-nicky",
+            "nicky_user_short_id": "NICKY01",
+            "nicky_user_email": "common@example.com",
+            "assets": [{"id": "USD.USD", "name": "USD"}],
+        }
+
+
+class FakeOtherUserNickyClient(FakeAdminNickyClient):
+    async def validate_api_key(self, nicky_api_key: str) -> dict:
+        return {
+            "nicky_user_uuid": "uuid-from-nicky",
+            "nicky_user_short_id": "NICKY01",
+            "nicky_user_email": "other@example.com",
+            "assets": [{"id": "USD.USD", "name": "USD"}],
+        }
+
+
+class FakeNoIdentityNickyClient(FakeAdminNickyClient):
+    async def validate_api_key(self, nicky_api_key: str) -> dict:
+        return {
+            "nicky_user_uuid": "",
+            "nicky_user_short_id": "",
+            "assets": [{"id": "USD.USD", "name": "USD"}],
+        }
+
+
+class FailingNickyValidationClient(NickyClient):
+    async def validate_api_key(self, nicky_api_key: str) -> dict:
+        raise NickyApiError(
+            "Could not validate Nicky API key: Nicky returned 401 Unauthorized",
+            status_code=401,
+        )
+
+
+def build_test_client(tmp_path, nicky_client_class=NickyClient, **settings_overrides) -> TestClient:
     settings_values = {
         "database_path": tmp_path / "integration.sqlite3",
-        "admin_token": "admin-secret",
         "admin_session_secret": "test-session-secret",
-        "dry_run": True,
         "nicky_default_blockchain_asset_id": "USD.USD",
     }
     settings_values.update(settings_overrides)
@@ -27,7 +79,7 @@ def build_test_client(tmp_path, **settings_overrides) -> TestClient:
     db = Database(settings.database_path)
     db.init()
     db.upsert_tenant(tenant_from_settings(settings, "demo-tenant"))
-    nicky_client = NickyClient(settings)
+    nicky_client = nicky_client_class(settings)
     ticket_tailor_client = TicketTailorClient(settings)
     service = IntegrationService(
         settings=settings,
@@ -36,17 +88,15 @@ def build_test_client(tmp_path, **settings_overrides) -> TestClient:
         ticket_tailor=ticket_tailor_client,
     )
 
-    def require_admin(
-        request: Request, x_admin_token: str | None = Header(default=None)
-    ):
-        if x_admin_token == settings.admin_token:
-            return admin_auth.make_admin_token_user()
+    def require_admin(request: Request):
         user = admin_auth.get_session_user(request)
         if user and admin_auth.has_allowed_role(user.roles, settings.admin_allowed_roles):
             return user
         raise HTTPException(status_code=401, detail="Admin authentication required")
 
     app = FastAPI()
+    app.state.db = db
+    app.state.settings = settings
     app.add_middleware(SessionMiddleware, secret_key=settings.admin_session_secret)
     app.include_router(
         create_admin_ui_router(
@@ -60,20 +110,87 @@ def build_test_client(tmp_path, **settings_overrides) -> TestClient:
     return TestClient(app)
 
 
+def sign_admin_session(
+    secret: str = "test-session-secret",
+    *,
+    subject: str = "auth0|admin",
+    name: str = "Admin User",
+    email: str = "admin@example.com",
+    roles: list[str] | None = None,
+    claims: dict | None = None,
+) -> str:
+    user_roles = ["Admin"] if roles is None else roles
+    user_claims = {"sub": subject, "roles": user_roles} if claims is None else claims
+    user = admin_auth.AdminUser(
+        subject=subject,
+        name=name,
+        email=email,
+        roles=user_roles,
+        claims=user_claims,
+        auth_method="test",
+    )
+    data = {admin_auth.SESSION_KEY: admin_auth.user_to_session(user)}
+    payload = base64.b64encode(json.dumps(data).encode("utf-8"))
+    return TimestampSigner(secret).sign(payload).decode("utf-8")
+
+
+def authenticate_admin(client: TestClient) -> None:
+    client.cookies.set("session", sign_admin_session())
+
+
+def authenticate_common_user(client: TestClient, *, nicky_user_uuid: str) -> None:
+    client.cookies.set(
+        "session",
+        sign_admin_session(
+            subject="auth0|common",
+            name="Common User",
+            email="common@example.com",
+            roles=[],
+            claims={
+                "sub": "auth0|common",
+                "nicky_user_uuid": nicky_user_uuid,
+            },
+        ),
+    )
+
+
+def authenticate_common_user_without_nicky_claim(client: TestClient) -> None:
+    client.cookies.set(
+        "session",
+        sign_admin_session(
+            subject="auth0|common",
+            name="Common User",
+            email="common@example.com",
+            roles=[],
+            claims={"sub": "auth0|common"},
+        ),
+    )
+
+
+def seed_tenant(
+    client: TestClient,
+    tenant_id: str,
+    *,
+    active: bool = True,
+    nicky_api_key: str = "existing_nicky_key",
+    ticket_tailor_api_key: str = "existing_tt_key",
+) -> None:
+    tenant = replace(
+        tenant_from_settings(client.app.state.settings, tenant_id),
+        active=active,
+        nicky_api_key=nicky_api_key,
+        ticket_tailor_api_key=ticket_tailor_api_key,
+        nicky_default_blockchain_asset_id="USD.USD",
+    )
+    client.app.state.db.upsert_tenant(tenant)
+
+
 def test_admin_ui_requires_auth0_configuration(tmp_path) -> None:
     client = build_test_client(tmp_path)
 
     login_page = client.get("/admin-ui/login?return_to=%2Fadmin-ui%2Ftenants")
     assert login_page.status_code == 503
     assert login_page.json()["detail"] == "Auth0 is required but is not configured"
-
-    response = client.post(
-        "/admin-ui/login/admin-token",
-        data={"admin_token": "admin-secret", "return_to": "/admin-ui/tenants"},
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 404
 
 
 def test_admin_ui_redirects_to_login_when_session_is_missing(tmp_path) -> None:
@@ -91,7 +208,6 @@ def test_admin_ui_auth0_login_redirects_to_universal_login(tmp_path) -> None:
     client = build_test_client(
         tmp_path,
         app_base_url="http://testserver",
-        admin_token="",
         auth0_domain="nicky-prod.us.auth0.com",
         auth0_client_id="auth0-client-id",
         auth0_audience="https://nicky-prod.azurewebsites.net",
@@ -125,7 +241,6 @@ def test_admin_ui_auth0_local_angular_compatibility_routes(tmp_path) -> None:
     client = build_test_client(
         tmp_path,
         app_base_url="http://localhost:4200",
-        admin_token="",
         auth0_domain="dev-eq0ptfwdhb1s1h12.us.auth0.com",
         auth0_client_id="auth0-client-id",
         auth0_audience="https://nicky-tech.azurewebsites.net",
@@ -144,3 +259,313 @@ def test_admin_ui_auth0_local_angular_compatibility_routes(tmp_path) -> None:
     auth0_params = parse_qs(auth0_url.query)
     assert auth0_url.netloc == "dev-eq0ptfwdhb1s1h12.us.auth0.com"
     assert auth0_params["redirect_uri"] == ["http://localhost:4200/overview"]
+
+
+def test_dashboard_does_not_show_mode_card(tmp_path) -> None:
+    client = build_test_client(tmp_path)
+    authenticate_admin(client)
+
+    response = client.get("/overview")
+
+    assert response.status_code == 200
+    assert ">Mode<" not in response.text
+    assert "fixed behavior" not in response.text
+
+
+def test_wildcard_allowed_roles_keeps_common_user_in_scoped_view(tmp_path) -> None:
+    client = build_test_client(tmp_path, admin_allowed_roles=["*"])
+    authenticate_common_user(client, nicky_user_uuid="demo-tenant")
+
+    response = client.get("/overview")
+
+    assert response.status_code == 200
+    assert ">User<" in response.text
+    assert ">Admin<" not in response.text
+    assert 'href="/admin-ui/tenants/new"' not in response.text
+    assert "All tenants" not in response.text
+
+
+def test_new_tenant_form_keeps_derived_fields_out_of_identity(tmp_path) -> None:
+    client = build_test_client(tmp_path)
+    authenticate_admin(client)
+
+    response = client.get("/admin-ui/tenants/new")
+    html = response.text
+    identity_block = html[html.index(">Identity<") : html.index(">Ticket Tailor<")]
+    nicky_block = html[html.index(">Nicky<") :]
+
+    assert response.status_code == 200
+    assert "Name" in identity_block
+    assert "Tenant UUID" not in identity_block
+    assert "Nicky user UUID" not in identity_block
+    assert "Nicky short ID" not in identity_block
+    assert "Nicky email" in nicky_block
+    assert "Nicky user UUID" not in nicky_block
+    assert "Nicky short ID" not in nicky_block
+    assert 'name="tenant_id"' not in html
+    assert "Webhook URL" not in html
+    assert "/webhooks/ticket-tailor/" not in html
+    assert 'data-toggle-secret="nicky-api-key"' in html
+    assert 'data-toggle-secret="ticket-tailor-api-key"' in html
+    assert 'id="validate-ticket-tailor-key"' in html
+    assert 'id="save-tenant-button"' in html
+    assert "disabled>Create tenant</button>" in html
+    assert 'name="nicky_user_email" type="email" value=""' in html
+    assert 'name="nicky_user_uuid"' not in html
+    assert 'name="nicky_user_short_id"' not in html
+
+
+def test_common_new_tenant_form_uses_auth0_email_for_nicky_identity(tmp_path) -> None:
+    client = build_test_client(tmp_path, admin_allowed_roles=["Admin"])
+    authenticate_common_user_without_nicky_claim(client)
+
+    response = client.get("/admin-ui/tenants/new")
+    html = response.text
+
+    assert response.status_code == 200
+    assert 'name="nicky_user_email" type="email" value="common@example.com" readonly' in html
+    assert 'name="nicky_user_uuid"' not in html
+    assert 'name="nicky_user_short_id"' not in html
+
+
+def test_existing_tenant_form_shows_final_ticket_tailor_webhook_url(tmp_path) -> None:
+    client = build_test_client(tmp_path, app_base_url="http://localhost:4200")
+    authenticate_admin(client)
+
+    response = client.get("/admin-ui/tenants/demo-tenant/edit")
+    html = response.text
+    identity_block = html[html.index(">Identity<") : html.index(">Ticket Tailor<")]
+    ticket_tailor_block = html[html.index(">Ticket Tailor<") : html.index(">Nicky<")]
+
+    assert response.status_code == 200
+    assert "Tenant UUID" in identity_block
+    assert "Ticket Tailor webhook" in ticket_tailor_block
+    assert "Settings &gt; Webhooks" in ticket_tailor_block
+    assert 'id="copy-ticket-tailor-webhook-url"' in ticket_tailor_block
+    assert "http://localhost:4200/webhooks/ticket-tailor/demo-tenant" in ticket_tailor_block
+
+
+def test_new_tenant_save_derives_tenant_uuid_from_nicky_validation(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FakeAdminNickyClient)
+    authenticate_admin(client)
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/tenants/uuid-from-nicky/edit?saved=1"
+
+
+def test_common_user_without_nicky_claim_can_save_matching_nicky_key(tmp_path) -> None:
+    client = build_test_client(
+        tmp_path,
+        nicky_client_class=FakeCommonUserNickyClient,
+        admin_allowed_roles=["Admin"],
+    )
+    authenticate_common_user_without_nicky_claim(client)
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+        follow_redirects=False,
+    )
+    tenant = client.app.state.db.get_tenant("uuid-from-nicky")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/tenants/uuid-from-nicky/edit?saved=1"
+    assert tenant is not None
+    assert tenant.owner_auth_subject == "auth0|common"
+
+
+def test_common_user_without_nicky_claim_can_save_valid_key_without_email_match(tmp_path) -> None:
+    client = build_test_client(
+        tmp_path,
+        nicky_client_class=FakeOtherUserNickyClient,
+        admin_allowed_roles=["Admin"],
+    )
+    authenticate_common_user_without_nicky_claim(client)
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/tenants/uuid-from-nicky/edit?saved=1"
+
+
+def test_new_tenant_save_generates_tenant_id_when_nicky_returns_no_identity(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FakeNoIdentityNickyClient)
+    authenticate_admin(client)
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant without Nicky identity",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "manual-user@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin-ui/tenants/tenant-")
+    assert response.headers["location"].endswith("/edit?saved=1")
+    tenant_id = response.headers["location"].split("/admin-ui/tenants/", 1)[1].split("/edit", 1)[0]
+    tenant = client.app.state.db.get_tenant(tenant_id)
+    assert tenant is not None
+    assert tenant.nicky_user_email == "manual-user@example.com"
+    assert tenant.nicky_user_uuid == ""
+    assert tenant.nicky_user_short_id == ""
+    assert tenant.nicky_receiver_short_id == ""
+
+
+def test_new_tenant_save_blocks_nicky_api_key_used_by_active_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FakeAdminNickyClient)
+    authenticate_admin(client)
+    seed_tenant(
+        client,
+        "active-conflict",
+        active=True,
+        nicky_api_key="nicky_live_key",
+        ticket_tailor_api_key="other_tt_key",
+    )
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Nicky API key is already used by an active tenant"
+
+
+def test_new_tenant_save_allows_nicky_api_key_used_by_inactive_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FakeAdminNickyClient)
+    authenticate_admin(client)
+    seed_tenant(
+        client,
+        "inactive-conflict",
+        active=False,
+        nicky_api_key="nicky_live_key",
+        ticket_tailor_api_key="other_tt_key",
+    )
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/tenants/uuid-from-nicky/edit?saved=1"
+
+
+def test_new_tenant_save_blocks_ticket_tailor_api_key_used_by_active_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FakeAdminNickyClient)
+    authenticate_admin(client)
+    seed_tenant(
+        client,
+        "active-tt-conflict",
+        active=True,
+        nicky_api_key="other_nicky_key",
+        ticket_tailor_api_key="tt_live_key",
+    )
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Ticket Tailor API key is already used by an active tenant"
+
+
+def test_new_tenant_save_allows_ticket_tailor_api_key_used_by_inactive_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FakeAdminNickyClient)
+    authenticate_admin(client)
+    seed_tenant(
+        client,
+        "inactive-tt-conflict",
+        active=False,
+        nicky_api_key="other_nicky_key",
+        ticket_tailor_api_key="tt_live_key",
+    )
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_user_email": "admin@example.com",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin-ui/tenants/uuid-from-nicky/edit?saved=1"
+
+
+def test_new_tenant_save_returns_json_error_when_nicky_rejects_key(tmp_path) -> None:
+    client = build_test_client(tmp_path, nicky_client_class=FailingNickyValidationClient)
+    authenticate_admin(client)
+
+    response = client.post(
+        "/admin-ui/tenants/save",
+        data={
+            "name": "Tenant from Nicky",
+            "ticket_tailor_api_key": "tt_live_key",
+            "nicky_api_key": "nicky_live_key",
+            "nicky_default_blockchain_asset_id": "USD.USD",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Invalid Nicky API key: Could not validate Nicky API key: "
+        "Nicky returned 401 Unauthorized"
+    )

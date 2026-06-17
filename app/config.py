@@ -21,13 +21,6 @@ def _load_dotenv(path: Path = Path(".env")) -> None:
 _load_dotenv()
 
 
-def _bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -54,18 +47,13 @@ class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     app_base_url: str = os.getenv("APP_BASE_URL", "http://localhost:8017").rstrip("/")
     database_path: Path = Path(os.getenv("DATABASE_PATH", "./data/integration.sqlite3"))
-    dry_run: bool = False
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
-    ticket_tailor_api_base_url: str = os.getenv(
-        "TICKET_TAILOR_API_BASE_URL", "https://api.tickettailor.com"
-    ).rstrip("/")
     ticket_tailor_api_key: str = os.getenv("TICKET_TAILOR_API_KEY", "")
     ticket_tailor_webhook_signing_secret: str = ""
     ticket_tailor_webhook_tolerance_seconds: int = _int_env(
         "TICKET_TAILOR_WEBHOOK_TOLERANCE_SECONDS", 300
     )
-    ticket_tailor_offline_payment_keywords: list[str] = None  # type: ignore[assignment]
     ticket_tailor_pending_ticket_expiration_hours: float = _float_env(
         "TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS", 0
     )
@@ -75,7 +63,6 @@ class Settings:
     ticket_tailor_expiration_batch_size: int = _int_env(
         "TICKET_TAILOR_EXPIRATION_BATCH_SIZE", 100
     )
-    auto_confirm_ticket_tailor_payments: bool = True
 
     nicky_api_base_url: str = os.getenv(
         "NICKY_API_BASE_URL", "https://api-public.pay.nicky.me"
@@ -86,15 +73,10 @@ class Settings:
         "NICKY_DEFAULT_BLOCKCHAIN_ASSET_ID", ""
     )
     nicky_receiver_short_id: str = os.getenv("NICKY_RECEIVER_SHORT_ID", "")
-    auto_create_nicky_payment_request: bool = True
-    nicky_send_notification: bool = True
     nicky_success_url: str = os.getenv("NICKY_SUCCESS_URL", "")
     nicky_cancel_url: str = os.getenv("NICKY_CANCEL_URL", "")
-    nicky_webhook_type: int = 2
     nicky_webhook_token: str = ""
-    skip_nicky: bool = False
 
-    admin_token: str = os.getenv("ADMIN_TOKEN", "")
     admin_session_secret: str = os.getenv(
         "ADMIN_SESSION_SECRET", "development-admin-session-secret"
     )
@@ -107,11 +89,6 @@ class Settings:
     admin_allowed_roles: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "ticket_tailor_offline_payment_keywords",
-            ["nicky payment"],
-        )
         object.__setattr__(
             self,
             "admin_allowed_roles",

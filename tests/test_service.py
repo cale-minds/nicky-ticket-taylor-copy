@@ -112,8 +112,6 @@ def seed_expired_order(
 async def test_ticket_tailor_webhook_is_idempotent_and_creates_live_payment(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
-        auto_create_nicky_payment_request=True,
         nicky_receiver_short_id="RCV123",
     )
     db = Database(settings.database_path)
@@ -162,8 +160,6 @@ async def test_ticket_tailor_webhook_is_idempotent_and_creates_live_payment(tmp_
 async def test_nicky_finished_status_confirms_ticket_tailor_in_live_flow(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
-        auto_confirm_ticket_tailor_payments=True,
     )
     db = Database(settings.database_path)
     db.init()
@@ -221,8 +217,6 @@ async def test_nicky_finished_status_confirms_ticket_tailor_in_live_flow(tmp_pat
 async def test_non_finished_nicky_status_voids_ticket_tailor_ticket(tmp_path, status) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
-        auto_confirm_ticket_tailor_payments=True,
     )
     db = Database(settings.database_path)
     db.init()
@@ -288,7 +282,6 @@ async def test_non_finished_nicky_status_voids_ticket_tailor_ticket(tmp_path, st
 async def test_expire_overdue_orders_voids_unfinished_ticket_tailor_ticket(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
         ticket_tailor_pending_ticket_expiration_hours=2,
     )
     db = Database(settings.database_path)
@@ -356,7 +349,6 @@ async def test_expire_overdue_orders_voids_unfinished_ticket_tailor_ticket(tmp_p
 async def test_expire_overdue_orders_uses_batch_size(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
         ticket_tailor_pending_ticket_expiration_hours=2,
         ticket_tailor_expiration_batch_size=2,
     )
@@ -389,7 +381,6 @@ async def test_expire_overdue_orders_uses_batch_size(tmp_path) -> None:
 async def test_expire_overdue_orders_continues_after_item_failure(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
         ticket_tailor_pending_ticket_expiration_hours=2,
         ticket_tailor_expiration_batch_size=10,
     )
@@ -421,9 +412,6 @@ async def test_expire_overdue_orders_continues_after_item_failure(tmp_path) -> N
 async def test_nicky_concluido_status_confirms_ticket_tailor(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
-        skip_nicky=True,
-        auto_confirm_ticket_tailor_payments=True,
         nicky_receiver_short_id="RCV123",
     )
     db = Database(settings.database_path)
@@ -479,8 +467,6 @@ async def test_nicky_concluido_status_confirms_ticket_tailor(tmp_path) -> None:
 async def test_webhook_ids_are_idempotent_per_tenant(tmp_path) -> None:
     settings = Settings(
         database_path=tmp_path / "integration.sqlite3",
-        dry_run=True,
-        auto_create_nicky_payment_request=True,
         nicky_receiver_short_id="RCV123",
     )
     db = Database(settings.database_path)
@@ -520,7 +506,7 @@ async def test_webhook_ids_are_idempotent_per_tenant(tmp_path) -> None:
 
 
 def test_failed_webhook_can_be_retried(tmp_path) -> None:
-    settings = Settings(database_path=tmp_path / "integration.sqlite3", dry_run=True)
+    settings = Settings(database_path=tmp_path / "integration.sqlite3")
     db = Database(settings.database_path)
     db.init()
 

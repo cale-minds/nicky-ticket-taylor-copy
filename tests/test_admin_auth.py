@@ -26,6 +26,21 @@ def test_allowed_roles_wildcard_allows_authenticated_user() -> None:
     assert admin_auth.has_allowed_role(["Viewer"], ["*"]) is True
 
 
+def test_wildcard_allowed_roles_does_not_make_user_admin() -> None:
+    settings = Settings(admin_allowed_roles=["*"])
+    user = admin_auth.AdminUser(
+        subject="auth0|user",
+        name="User",
+        email="user@example.com",
+        roles=[],
+        claims={"sub": "auth0|user"},
+        auth_method="auth0",
+    )
+
+    assert admin_auth.is_admin(user, settings) is False
+    assert admin_auth.is_privileged(user, settings) is False
+
+
 def test_admin_allowed_roles_define_admin_profile() -> None:
     settings = Settings(admin_allowed_roles=["TenantAdmin"])
     user = admin_auth.AdminUser(

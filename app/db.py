@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from app.tenants import TenantConfig, keywords_to_csv, tenant_from_row
+from app.tenants import TenantConfig, tenant_from_row
 
 
 SCHEMA = """
@@ -17,19 +17,16 @@ CREATE TABLE IF NOT EXISTS tenants (
   active INTEGER NOT NULL DEFAULT 1,
   nicky_user_uuid TEXT NOT NULL DEFAULT '',
   nicky_user_short_id TEXT NOT NULL DEFAULT '',
+  nicky_user_email TEXT NOT NULL DEFAULT '',
   ticket_tailor_api_key TEXT NOT NULL DEFAULT '',
   ticket_tailor_webhook_signing_secret TEXT NOT NULL DEFAULT '',
-  ticket_tailor_offline_payment_keywords TEXT NOT NULL DEFAULT 'nicky payment',
   nicky_api_key TEXT NOT NULL DEFAULT '',
   nicky_default_blockchain_asset_id TEXT NOT NULL DEFAULT '',
   nicky_receiver_short_id TEXT NOT NULL DEFAULT '',
   nicky_webhook_token TEXT NOT NULL DEFAULT '',
   nicky_webhook_type INTEGER NOT NULL DEFAULT 2,
-  auto_create_nicky_payment_request INTEGER NOT NULL DEFAULT 1,
-  auto_confirm_ticket_tailor_payments INTEGER NOT NULL DEFAULT 1,
   nicky_send_notification INTEGER NOT NULL DEFAULT 1,
-  skip_nicky INTEGER NOT NULL DEFAULT 0,
-  dry_run INTEGER NOT NULL DEFAULT 0,
+  owner_auth_subject TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -98,7 +95,18 @@ class Database:
             self._copy_legacy_tables(conn, legacy_tables)
             self._ensure_column(conn, "tenants", "nicky_user_uuid", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "tenants", "nicky_user_short_id", "TEXT NOT NULL DEFAULT ''")
-            self._ensure_column(conn, "tenants", "skip_nicky", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "tenants", "nicky_user_email", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "tenants", "owner_auth_subject", "TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                """
+                UPDATE tenants
+                SET nicky_user_email = nicky_user_uuid,
+                    nicky_user_uuid = '',
+                    nicky_user_short_id = ''
+                WHERE nicky_user_email = ''
+                  AND nicky_user_uuid LIKE '%@%'
+                """
+            )
             self._ensure_column(conn, "order_logs", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
             self._ensure_column(
                 conn, "integration_orders", "ticket_tailor_tickets_voided_at", "TEXT"
@@ -239,35 +247,29 @@ class Database:
             conn.execute(
                 """
                 INSERT INTO tenants(
-                  tenant_id, name, active, nicky_user_uuid, nicky_user_short_id,
+                  tenant_id, name, active, nicky_user_uuid, nicky_user_short_id, nicky_user_email,
                   ticket_tailor_api_key,
-                  ticket_tailor_webhook_signing_secret,
-                  ticket_tailor_offline_payment_keywords, nicky_api_key,
+                  ticket_tailor_webhook_signing_secret, nicky_api_key,
                   nicky_default_blockchain_asset_id, nicky_receiver_short_id,
                   nicky_webhook_token, nicky_webhook_type,
-                  auto_create_nicky_payment_request,
-                  auto_confirm_ticket_tailor_payments, nicky_send_notification,
-                  skip_nicky, dry_run
+                  nicky_send_notification, owner_auth_subject
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant_id) DO UPDATE SET
                   name = excluded.name,
                   active = excluded.active,
                   nicky_user_uuid = excluded.nicky_user_uuid,
                   nicky_user_short_id = excluded.nicky_user_short_id,
+                  nicky_user_email = excluded.nicky_user_email,
                   ticket_tailor_api_key = excluded.ticket_tailor_api_key,
                   ticket_tailor_webhook_signing_secret = excluded.ticket_tailor_webhook_signing_secret,
-                  ticket_tailor_offline_payment_keywords = excluded.ticket_tailor_offline_payment_keywords,
                   nicky_api_key = excluded.nicky_api_key,
                   nicky_default_blockchain_asset_id = excluded.nicky_default_blockchain_asset_id,
                   nicky_receiver_short_id = excluded.nicky_receiver_short_id,
                   nicky_webhook_token = excluded.nicky_webhook_token,
                   nicky_webhook_type = excluded.nicky_webhook_type,
-                  auto_create_nicky_payment_request = excluded.auto_create_nicky_payment_request,
-                  auto_confirm_ticket_tailor_payments = excluded.auto_confirm_ticket_tailor_payments,
                   nicky_send_notification = excluded.nicky_send_notification,
-                  skip_nicky = excluded.skip_nicky,
-                  dry_run = excluded.dry_run,
+                  owner_auth_subject = excluded.owner_auth_subject,
                   updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -276,19 +278,16 @@ class Database:
                     int(tenant.active),
                     tenant.nicky_user_uuid,
                     tenant.nicky_user_short_id,
+                    tenant.nicky_user_email,
                     tenant.ticket_tailor_api_key,
                     tenant.ticket_tailor_webhook_signing_secret,
-                    keywords_to_csv(tenant.ticket_tailor_offline_payment_keywords),
                     tenant.nicky_api_key,
                     tenant.nicky_default_blockchain_asset_id,
                     tenant.nicky_receiver_short_id,
                     tenant.nicky_webhook_token,
                     tenant.nicky_webhook_type,
-                    int(tenant.auto_create_nicky_payment_request),
-                    int(tenant.auto_confirm_ticket_tailor_payments),
                     int(tenant.nicky_send_notification),
-                    int(tenant.skip_nicky),
-                    int(tenant.dry_run),
+                    tenant.owner_auth_subject,
                 ),
             )
 
@@ -302,6 +301,29 @@ class Database:
                 """,
                 (tenant_id,),
             )
+
+    def find_active_tenant_by_api_key(
+        self,
+        column: str,
+        api_key: str,
+        *,
+        exclude_tenant_id: str | None = None,
+    ) -> TenantConfig | None:
+        if column not in {"nicky_api_key", "ticket_tailor_api_key"}:
+            raise ValueError("Unsupported tenant API key column")
+        if not api_key:
+            return None
+        conditions = [f"{column} = ?", "active = 1"]
+        params: list[Any] = [api_key]
+        if exclude_tenant_id:
+            conditions.append("tenant_id != ?")
+            params.append(exclude_tenant_id)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"SELECT * FROM tenants WHERE {' AND '.join(conditions)} LIMIT 1",
+                params,
+            ).fetchone()
+        return tenant_from_row(row) if row else None
 
     def get_tenant(self, tenant_id: str) -> TenantConfig | None:
         with self.connect() as conn:
@@ -320,10 +342,11 @@ class Database:
         active: str | None = None,
         configuration: str | None = None,
         nicky_user_uuid: str | None = None,
+        owner_auth_subject: str | None = None,
     ) -> list[TenantConfig]:
         with self.connect() as conn:
             where_clause, params = self._tenant_filters(
-                query, active, configuration, nicky_user_uuid
+                query, active, configuration, nicky_user_uuid, owner_auth_subject
             )
             limit_clause = ""
             if limit is not None:
@@ -347,10 +370,11 @@ class Database:
         active: str | None = None,
         configuration: str | None = None,
         nicky_user_uuid: str | None = None,
+        owner_auth_subject: str | None = None,
     ) -> int:
         with self.connect() as conn:
             where_clause, params = self._tenant_filters(
-                query, active, configuration, nicky_user_uuid
+                query, active, configuration, nicky_user_uuid, owner_auth_subject
             )
             row = conn.execute(
                 f"SELECT COUNT(*) AS count FROM tenants {where_clause}",
@@ -364,18 +388,22 @@ class Database:
         active: str | None,
         configuration: str | None,
         nicky_user_uuid: str | None = None,
+        owner_auth_subject: str | None = None,
     ) -> tuple[str, list[Any]]:
         conditions: list[str] = []
         params: list[Any] = []
         if query:
             conditions.append(
-                "(tenant_id LIKE ? OR name LIKE ? OR nicky_user_uuid LIKE ? OR nicky_user_short_id LIKE ?)"
+                "(tenant_id LIKE ? OR name LIKE ? OR nicky_user_uuid LIKE ? OR nicky_user_short_id LIKE ? OR nicky_user_email LIKE ?)"
             )
             like = f"%{query}%"
-            params.extend([like, like, like, like])
+            params.extend([like, like, like, like, like])
         if nicky_user_uuid:
             conditions.append("nicky_user_uuid = ?")
             params.append(nicky_user_uuid)
+        if owner_auth_subject:
+            conditions.append("owner_auth_subject = ?")
+            params.append(owner_auth_subject)
         if active == "active":
             conditions.append("active = 1")
         elif active == "inactive":

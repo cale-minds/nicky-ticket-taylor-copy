@@ -8,6 +8,12 @@ from app.config import Settings
 from app.tenants import NICKY_WEBHOOK_TYPE, TenantConfig
 
 
+class NickyApiError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class NickyClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -36,66 +42,129 @@ class NickyClient:
             "successUrl": self._success_url(tenant),
             "cancelUrl": self._cancel_url(tenant),
         }
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(
-                f"{self.settings.nicky_api_base_url}/api/public/PaymentRequestPublicApi/create",
-                headers={"X-API-KEY": tenant.nicky_api_key},
-                json=body,
-            )
-            response.raise_for_status()
-            return response.json()
+        return await self._request_json(
+            "POST",
+            "/api/public/PaymentRequestPublicApi/create",
+            api_key=tenant.nicky_api_key,
+            operation="create Nicky payment request",
+            json=body,
+        )
 
     async def get_payment_request(
         self, tenant: TenantConfig, payment_request_id: str
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(
-                f"{self.settings.nicky_api_base_url}/api/public/PaymentRequestPublicApi/get-by-id",
-                headers={"X-API-KEY": tenant.nicky_api_key},
-                params={"id": payment_request_id},
-            )
-            response.raise_for_status()
-            return response.json()
+        return await self._request_json(
+            "GET",
+            "/api/public/PaymentRequestPublicApi/get-by-id",
+            api_key=tenant.nicky_api_key,
+            operation="get Nicky payment request",
+            params={"id": payment_request_id},
+        )
 
     async def create_webhook(self, tenant: TenantConfig, url: str) -> dict[str, Any]:
         if not tenant.nicky_api_key:
             raise ValueError("Nicky API key is required to create webhook")
 
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(
-                f"{self.settings.nicky_api_base_url}/api/public/WebHookApi/create",
-                headers={"X-API-KEY": tenant.nicky_api_key},
-                json={"webHookType": NICKY_WEBHOOK_TYPE, "url": url},
-            )
-            response.raise_for_status()
-            return response.json()
+        return await self._request_json(
+            "POST",
+            "/api/public/WebHookApi/create",
+            api_key=tenant.nicky_api_key,
+            operation="create Nicky webhook",
+            json={"webHookType": NICKY_WEBHOOK_TYPE, "url": url},
+        )
 
     async def test_status_change_webhook(self, tenant: TenantConfig) -> dict[str, Any]:
         if not tenant.nicky_api_key:
             raise ValueError("Nicky API key is required to test webhook")
 
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(
-                f"{self.settings.nicky_api_base_url}/api/public/WebHookApi/test-status-change",
-                headers={"X-API-KEY": tenant.nicky_api_key},
-            )
-            response.raise_for_status()
-            return response.json()
+        return await self._request_json(
+            "POST",
+            "/api/public/WebHookApi/test-status-change",
+            api_key=tenant.nicky_api_key,
+            operation="test Nicky webhook",
+        )
 
     async def validate_api_key(self, api_key: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(
-                f"{self.settings.nicky_api_base_url}/AcceptedAsset/get-for-user",
-                headers={"X-API-KEY": api_key},
+        assets_payload = await self._request_json(
+            "GET",
+            "/AcceptedAsset/get-for-user",
+            api_key=api_key,
+            operation="validate Nicky API key",
+        )
+        user_payload: Any = assets_payload
+        if not self._extract_user_uuid(user_payload):
+            user_payload = await self._request_json(
+                "POST",
+                "/api/public/PaymentRequestPublicApi/all",
+                api_key=api_key,
+                operation="load Nicky user profile",
+                json={"pageIndex": 0, "pageSize": 1},
             )
-            response.raise_for_status()
-            payload = response.json()
         return {
-            "nicky_user_uuid": self._extract_user_uuid(payload),
-            "nicky_user_short_id": self._extract_user_short_id(payload),
-            "assets": self._extract_assets(payload),
-            "raw": payload,
+            "nicky_user_uuid": self._extract_user_uuid(user_payload),
+            "nicky_user_short_id": self._extract_user_short_id(user_payload),
+            "nicky_user_email": self._extract_user_email(user_payload),
+            "assets": self._extract_assets(assets_payload),
+            "raw": assets_payload,
         }
+
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        api_key: str,
+        operation: str,
+        **request_kwargs: Any,
+    ) -> Any:
+        url = f"{self.settings.nicky_api_base_url}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.request(
+                    method,
+                    url,
+                    headers={"X-API-KEY": api_key},
+                    **request_kwargs,
+                )
+        except httpx.RequestError as exc:
+            raise NickyApiError(
+                f"Could not {operation}: {exc.__class__.__name__}",
+            ) from exc
+
+        if response.status_code >= 400:
+            raise NickyApiError(
+                self._error_message(operation, response),
+                status_code=response.status_code,
+            )
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise NickyApiError(
+                f"Could not {operation}: Nicky returned a non-JSON response",
+                status_code=response.status_code,
+            ) from exc
+
+    @staticmethod
+    def _error_message(operation: str, response: httpx.Response) -> str:
+        reason = response.reason_phrase or "HTTP error"
+        detail = ""
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                detail_value = (
+                    payload.get("detail")
+                    or payload.get("message")
+                    or payload.get("error")
+                    or payload.get("title")
+                )
+                if detail_value:
+                    detail = f": {detail_value}"
+        except ValueError:
+            body = response.text.strip()
+            if body:
+                detail = f": {body[:180]}"
+        return f"Could not {operation}: Nicky returned {response.status_code} {reason}{detail}"
 
     def _success_url(self, tenant: TenantConfig) -> str | None:
         if self.settings.nicky_success_url:
@@ -137,7 +206,14 @@ class NickyClient:
             asset_id = item.get("blockchainAssetId") or item.get("assetId") or item.get("id")
             if not asset_id:
                 continue
-            name = item.get("name") or item.get("symbol") or item.get("ticker") or asset_id
+            name = (
+                item.get("name")
+                or item.get("assetName")
+                or item.get("symbol")
+                or item.get("ticker")
+                or item.get("assetTicker")
+                or asset_id
+            )
             assets.append({"id": str(asset_id), "name": str(name)})
         return assets
 
@@ -158,6 +234,17 @@ class NickyClient:
         if not user:
             return ""
         for key in ("shortId", "short_id", "publicName", "public_name"):
+            value = user.get(key)
+            if value:
+                return str(value)
+        return ""
+
+    @classmethod
+    def _extract_user_email(cls, payload: Any) -> str:
+        user = cls._find_user_object(payload)
+        if not user:
+            return ""
+        for key in ("email", "userEmail", "user_email"):
             value = user.get(key)
             if value:
                 return str(value)
