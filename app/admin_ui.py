@@ -181,7 +181,7 @@ def create_admin_ui_router(
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">Recent webhooks</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-            {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope))}
+            {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
             {webhook_table(webhooks)}
             {pagination_controls(webhooks_page_number, DASHBOARD_PAGE_SIZE, webhooks_total, "/overview", request.query_params, "webhooks_page")}
           </div>
@@ -189,7 +189,7 @@ def create_admin_ui_router(
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">Recent orders</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-            {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope))}
+            {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
             {orders_table(orders)}
             {pagination_controls(orders_page_number, DASHBOARD_PAGE_SIZE, orders_total, "/overview", request.query_params, "orders_page")}
           </div>
@@ -434,7 +434,7 @@ def create_admin_ui_router(
           </div>
         </section>
         <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-          {orders_page_filters_form(order_filters, tenants, show_tenant_filter=scope_shows_tenant_filter(tenant_scope))}
+          {orders_page_filters_form(order_filters, tenants, show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
           {orders_table(orders)}
           {pagination_controls(page_number, DEFAULT_PAGE_SIZE, total, "/admin-ui/orders", request.query_params, "page")}
         </div>
@@ -666,10 +666,7 @@ def scoped_tenant_scope(
 
 def scope_shows_tenant_filter(scope: TenantScope) -> bool:
     """Return True when the tenant dropdown should be shown in filter forms."""
-    if not scope.scoped:
-        return True  # admin / support: show all tenants
-    # Regular users: only show the filter when they own more than one tenant
-    return bool(scope.allowed_tenant_ids and len(scope.allowed_tenant_ids) > 1)
+    return True
 
 
 def can_write_tenants(user: admin_auth.AdminUser, settings: Settings) -> bool:
@@ -1299,8 +1296,10 @@ def order_actions(order: dict[str, Any], *, user: admin_auth.AdminUser, settings
     """
 
 
-def tenant_options(tenants: list[TenantConfig], selected: str | None) -> str:
-    options = option_tag("", "All tenants", selected or "")
+def tenant_options(
+    tenants: list[TenantConfig], selected: str | None, *, include_all: bool = True
+) -> str:
+    options = option_tag("", "All tenants", selected or "") if include_all else ""
     for tenant in tenants:
         options += option_tag(tenant.tenant_id, tenant.tenant_id, selected or "")
     return options
@@ -1408,6 +1407,7 @@ def order_filters_form(
     *,
     action: str,
     show_tenant_filter: bool = True,
+    allow_all_tenants: bool = True,
 ) -> str:
     selected = str(order_filters.get("order_state") or "")
     options = "".join(
@@ -1422,7 +1422,7 @@ def order_filters_form(
     selected_tenant = str(order_filters.get("tenant_id") or "")
     tenant_field = ""
     if show_tenant_filter:
-        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="orders_tenant_id">{tenant_options(tenants, selected_tenant)}</select></label>'
+        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="orders_tenant_id">{tenant_options(tenants, selected_tenant, include_all=allow_all_tenants)}</select></label>'
     return f"""
     <div class="border-b border-slate-100 p-4">
       <form method="get" action="{e(action)}" class="grid min-w-0 grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(200px,1.1fr)_auto]">
@@ -1447,6 +1447,7 @@ def webhook_filters_form(
     *,
     action: str,
     show_tenant_filter: bool = True,
+    allow_all_tenants: bool = True,
 ) -> str:
     selected = str(webhook_filters.get("status") or "")
     options = "".join(
@@ -1462,7 +1463,7 @@ def webhook_filters_form(
     selected_tenant = str(webhook_filters.get("tenant_id") or "")
     tenant_field = ""
     if show_tenant_filter:
-        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="webhooks_tenant_id">{tenant_options(tenants, selected_tenant)}</select></label>'
+        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="webhooks_tenant_id">{tenant_options(tenants, selected_tenant, include_all=allow_all_tenants)}</select></label>'
     return f"""
     <div class="border-b border-slate-100 p-4">
       <form method="get" action="{e(action)}" class="grid min-w-0 grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(200px,1.1fr)_auto]">
@@ -1485,6 +1486,7 @@ def orders_page_filters_form(
     tenants: list[TenantConfig],
     *,
     show_tenant_filter: bool = True,
+    allow_all_tenants: bool = True,
 ) -> str:
     selected = str(order_filters.get("order_state") or "")
     options = "".join(
@@ -1498,7 +1500,7 @@ def orders_page_filters_form(
     )
     tenant_field = ""
     if show_tenant_filter:
-        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="tenant_id">{tenant_options(tenants, str(order_filters.get("tenant_id") or ""))}</select></label>'
+        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="tenant_id">{tenant_options(tenants, str(order_filters.get("tenant_id") or ""), include_all=allow_all_tenants)}</select></label>'
     return f"""
     <div class="border-b border-slate-100 p-4">
       <form method="get" action="/admin-ui/orders" class="grid min-w-0 grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(200px,1.1fr)_auto]">

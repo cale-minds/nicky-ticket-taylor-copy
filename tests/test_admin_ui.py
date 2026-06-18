@@ -342,6 +342,9 @@ def test_wildcard_allowed_roles_keeps_common_user_in_scoped_view(tmp_path) -> No
     assert ">User<" in response.text
     assert ">Admin<" not in response.text
     assert 'href="/admin-ui/tenants/new"' in response.text
+    assert 'name="orders_tenant_id"' in response.text
+    assert 'name="webhooks_tenant_id"' in response.text
+    assert '<option value="demo-tenant" selected>demo-tenant</option>' in response.text
     assert "All tenants" not in response.text
 
 
