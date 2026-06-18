@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "FastAPI – local Auth0 mode",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "4200"],
+      "port": 4200,
+      "autoPort": false,
+      "env": {
+        "FASTAPI_HOST": "127.0.0.1",
+        "FASTAPI_PORT": "4200",
+        "APP_BASE_URL": "http://localhost:4200",
+        "AUTH0_CALLBACK_PATH": "/overview",
+        "AUTH0_DOMAIN": "dev-eq0ptfwdhb1s1h12.us.auth0.com",
+        "AUTH0_CLIENT_ID": "SqrJq2fxJ6adrOFaR24oh9COF4vZwqba",
+        "AUTH0_AUDIENCE": "https://nicky-tech.azurewebsites.net",
+        "ADMIN_ALLOWED_ROLES": "Admin",
+        "NICKY_API_BASE_URL": "https://api-public.dev.pay.nicky.me"
+      }
+    },
+    {
+      "name": "FastAPI – Cloudflare tunnel mode",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8017"],
+      "port": 8017,
+      "env": {
+        "FASTAPI_HOST": "127.0.0.1",
+        "FASTAPI_PORT": "8017"
+      }
+    }
+  ]
+}
