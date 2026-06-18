@@ -32,7 +32,7 @@ from app.ticket_tailor import TicketTailorClient
 
 
 settings = get_settings()
-db = Database(settings.database_path)
+db = Database(settings.resolved_database_url)
 nicky_client = NickyClient(settings)
 ticket_tailor_client = TicketTailorClient(settings)
 service = IntegrationService(

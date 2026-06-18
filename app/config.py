@@ -49,6 +49,11 @@ def _path_env(name: str, default: str) -> str:
     return raw if raw.startswith("/") else f"/{raw}"
 
 
+def sqlite_url_from_path(path: Path) -> str:
+    resolved = path.expanduser().resolve()
+    return f"sqlite:///{resolved.as_posix()}"
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
@@ -57,6 +62,7 @@ class Settings:
     admin_api_base_path: str = _path_env(
         "ADMIN_API_BASE_PATH", os.getenv("API_BASE_PATH", "/api")
     )
+    database_url: str = os.getenv("DATABASE_URL", "").strip()
     database_path: Path = Path(os.getenv("DATABASE_PATH", "./data/integration.sqlite3"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
@@ -107,6 +113,10 @@ class Settings:
             if self.admin_allowed_roles is not None
             else _csv_env("ADMIN_ALLOWED_ROLES", ["Admin"]),
         )
+
+    @property
+    def resolved_database_url(self) -> str:
+        return self.database_url or sqlite_url_from_path(self.database_path)
 
 
 def get_settings() -> Settings:

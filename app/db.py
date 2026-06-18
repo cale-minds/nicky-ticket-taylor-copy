@@ -1,305 +1,212 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-import time
+import re
 from contextlib import contextmanager
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping, Sequence
 
+import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.engine import Connection, CursorResult, Engine, RowMapping
+
+from app.config import sqlite_url_from_path
+from app.db_models import integration_orders, order_logs, tenants, webhook_events
 from app.tenants import TenantConfig, tenant_from_row
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS tenants (
-  tenant_id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1,
-  nicky_user_uuid TEXT NOT NULL DEFAULT '',
-  nicky_user_short_id TEXT NOT NULL DEFAULT '',
-  nicky_user_email TEXT NOT NULL DEFAULT '',
-  ticket_tailor_api_key TEXT NOT NULL DEFAULT '',
-  ticket_tailor_webhook_signing_secret TEXT NOT NULL DEFAULT '',
-  nicky_api_key TEXT NOT NULL DEFAULT '',
-  nicky_default_blockchain_asset_id TEXT NOT NULL DEFAULT '',
-  nicky_receiver_short_id TEXT NOT NULL DEFAULT '',
-  nicky_webhook_token TEXT NOT NULL DEFAULT '',
-  nicky_webhook_type INTEGER NOT NULL DEFAULT 2,
-  nicky_send_notification INTEGER NOT NULL DEFAULT 1,
-  owner_auth_subject TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+class Record(dict):
+    """Small mapping wrapper that preserves sqlite3.Row-style access."""
 
-CREATE TABLE IF NOT EXISTS webhook_events (
-  tenant_id TEXT NOT NULL,
-  source TEXT NOT NULL,
-  event_id TEXT NOT NULL,
-  event_type TEXT NOT NULL,
-  received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  processed_at TEXT,
-  status TEXT NOT NULL,
-  raw_body TEXT NOT NULL,
-  error TEXT,
-  PRIMARY KEY (tenant_id, source, event_id)
-);
 
-CREATE TABLE IF NOT EXISTS integration_orders (
-  tenant_id TEXT NOT NULL,
-  ticket_tailor_order_id TEXT NOT NULL,
-  event_id TEXT,
-  status TEXT,
-  payment_status TEXT,
-  currency TEXT,
-  amount_minor INTEGER,
-  buyer_email TEXT,
-  buyer_name TEXT,
-  raw_payload_json TEXT NOT NULL,
-  nicky_payment_request_id TEXT,
-  nicky_bill_short_id TEXT,
-  nicky_receiver_short_id TEXT,
-  nicky_payment_url TEXT,
-  nicky_status TEXT,
-  ticket_tailor_confirmed_at TEXT,
-  ticket_tailor_tickets_voided_at TEXT,
-  ticket_tailor_void_reason TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (tenant_id, ticket_tailor_order_id)
-);
+class DatabaseResult:
+    def __init__(self, result: CursorResult[Any]) -> None:
+        self._result = result
+        self.rowcount = result.rowcount
 
-CREATE INDEX IF NOT EXISTS idx_integration_orders_nicky_payment
-ON integration_orders(tenant_id, nicky_payment_request_id);
+    def fetchone(self) -> Record | None:
+        if not self._result.returns_rows:
+            return None
+        row = self._result.mappings().fetchone()
+        return record(row)
 
-CREATE TABLE IF NOT EXISTS order_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  tenant_id TEXT NOT NULL,
-  ticket_tailor_order_id TEXT NOT NULL,
-  event_type TEXT NOT NULL,
-  message TEXT NOT NULL,
-  payload_json TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
+    def fetchall(self) -> list[Record]:
+        if not self._result.returns_rows:
+            return []
+        return records(self._result.mappings().fetchall())
+
+
+class DatabaseConnection:
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def execute(
+        self,
+        statement: str | sa.Executable,
+        parameters: Sequence[Any] | Mapping[str, Any] | None = None,
+    ) -> DatabaseResult:
+        if isinstance(statement, str):
+            sql, params = positional_sql(statement, parameters)
+            return DatabaseResult(self._connection.execute(sa.text(sql), params))
+        return DatabaseResult(self._connection.execute(statement, parameters or {}))
+
+
+def record(row: RowMapping | Mapping[str, Any] | None) -> Record | None:
+    if row is None:
+        return None
+    return Record(dict(row))
+
+
+def records(rows: Sequence[RowMapping | Mapping[str, Any]]) -> list[Record]:
+    return [Record(dict(row)) for row in rows]
+
+
+def positional_sql(
+    statement: str,
+    parameters: Sequence[Any] | Mapping[str, Any] | None,
+) -> tuple[str, Mapping[str, Any]]:
+    if parameters is None:
+        return statement, {}
+    if isinstance(parameters, Mapping):
+        return statement, parameters
+
+    values = list(parameters)
+    parts = statement.split("?")
+    if len(parts) - 1 != len(values):
+        raise ValueError("SQL positional parameter count does not match supplied values")
+
+    rewritten: list[str] = []
+    params: dict[str, Any] = {}
+    for index, part in enumerate(parts[:-1]):
+        name = f"p{index}"
+        rewritten.append(part)
+        rewritten.append(f":{name}")
+        params[name] = values[index]
+    rewritten.append(parts[-1])
+    return "".join(rewritten), params
+
+
+def database_url_from_value(value: str | Path) -> str:
+    if isinstance(value, Path):
+        return sqlite_url_from_path(value)
+    text = str(value)
+    if "://" in text:
+        return text
+    return sqlite_url_from_path(Path(text))
+
+
+def prepare_sqlite_parent(database_url: str) -> None:
+    if not database_url.startswith("sqlite:///"):
+        return
+    raw_path = database_url.removeprefix("sqlite:///")
+    if raw_path in {"", ":memory:"}:
+        return
+    Path(raw_path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def create_engine(database_url: str) -> Engine:
+    prepare_sqlite_parent(database_url)
+    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    return sa.create_engine(
+        database_url,
+        future=True,
+        pool_pre_ping=not database_url.startswith("sqlite"),
+        connect_args=connect_args,
+    )
+
+
+def run_migrations(database_url: str) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    config = Config(str(project_root / "alembic.ini"))
+    config.set_main_option("script_location", str(project_root / "migrations"))
+    config.attributes["database_url"] = database_url
+    command.upgrade(config, "head")
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def date_start(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.combine(date.fromisoformat(value), time.min)
+
+
+def date_end_exclusive(value: str | None) -> datetime | None:
+    start = date_start(value)
+    return start + timedelta(days=1) if start else None
 
 
 class Database:
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(self, database_url_or_path: str | Path) -> None:
+        self.database_url = database_url_from_value(database_url_or_path)
+        self.engine = create_engine(self.database_url)
 
     def init(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
-            legacy_tables = self._prepare_legacy_tables(conn)
-            conn.executescript(SCHEMA)
-            self._copy_legacy_tables(conn, legacy_tables)
-            self._ensure_column(conn, "tenants", "nicky_user_uuid", "TEXT NOT NULL DEFAULT ''")
-            self._ensure_column(conn, "tenants", "nicky_user_short_id", "TEXT NOT NULL DEFAULT ''")
-            self._ensure_column(conn, "tenants", "nicky_user_email", "TEXT NOT NULL DEFAULT ''")
-            self._ensure_column(conn, "tenants", "owner_auth_subject", "TEXT NOT NULL DEFAULT ''")
-            conn.execute(
-                """
-                UPDATE tenants
-                SET nicky_user_email = nicky_user_uuid,
-                    nicky_user_uuid = '',
-                    nicky_user_short_id = ''
-                WHERE nicky_user_email = ''
-                  AND nicky_user_uuid LIKE '%@%'
-                """
-            )
-            self._ensure_column(conn, "order_logs", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
-            self._ensure_column(
-                conn, "integration_orders", "ticket_tailor_tickets_voided_at", "TEXT"
-            )
-            self._ensure_column(
-                conn, "integration_orders", "ticket_tailor_void_reason", "TEXT"
-            )
-
-    @staticmethod
-    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table_name,),
-        ).fetchone()
-        return bool(row)
-
-    @staticmethod
-    def _primary_key_columns(conn: sqlite3.Connection, table_name: str) -> list[str]:
-        columns = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        return [
-            row["name"]
-            for row in sorted((row for row in columns if row["pk"]), key=lambda item: item["pk"])
-        ]
-
-    def _prepare_legacy_tables(self, conn: sqlite3.Connection) -> dict[str, str]:
-        desired_primary_keys = {
-            "webhook_events": ["tenant_id", "source", "event_id"],
-            "integration_orders": ["tenant_id", "ticket_tailor_order_id"],
-        }
-        legacy_tables: dict[str, str] = {}
-        for table_name, desired_pk in desired_primary_keys.items():
-            if not self._table_exists(conn, table_name):
-                continue
-            if self._primary_key_columns(conn, table_name) == desired_pk:
-                continue
-            legacy_name = f"{table_name}_legacy_{int(time.time())}"
-            conn.execute(f"ALTER TABLE {table_name} RENAME TO {legacy_name}")
-            legacy_tables[table_name] = legacy_name
-        return legacy_tables
-
-    def _copy_legacy_tables(self, conn: sqlite3.Connection, legacy_tables: dict[str, str]) -> None:
-        for target_name, legacy_name in legacy_tables.items():
-            if target_name == "webhook_events":
-                self._copy_legacy_webhook_events(conn, legacy_name)
-            elif target_name == "integration_orders":
-                self._copy_legacy_orders(conn, legacy_name)
-
-    @staticmethod
-    def _copy_legacy_webhook_events(conn: sqlite3.Connection, legacy_name: str) -> None:
-        rows = conn.execute(f"SELECT * FROM {legacy_name}").fetchall()
-        for row in rows:
-            data = dict(row)
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO webhook_events(
-                  tenant_id, source, event_id, event_type, received_at, processed_at,
-                  status, raw_body, error
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    data.get("tenant_id") or "default",
-                    data["source"],
-                    data["event_id"],
-                    data["event_type"],
-                    data.get("received_at"),
-                    data.get("processed_at"),
-                    data["status"],
-                    data["raw_body"],
-                    data.get("error"),
-                ),
-            )
-
-    @staticmethod
-    def _copy_legacy_orders(conn: sqlite3.Connection, legacy_name: str) -> None:
-        rows = conn.execute(f"SELECT * FROM {legacy_name}").fetchall()
-        for row in rows:
-            data = dict(row)
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO integration_orders(
-                  tenant_id, ticket_tailor_order_id, event_id, status, payment_status,
-                  currency, amount_minor, buyer_email, buyer_name, raw_payload_json,
-                  nicky_payment_request_id, nicky_bill_short_id, nicky_receiver_short_id,
-                  nicky_payment_url, nicky_status, ticket_tailor_confirmed_at,
-                  ticket_tailor_tickets_voided_at, ticket_tailor_void_reason,
-                  created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    data.get("tenant_id") or "default",
-                    data["ticket_tailor_order_id"],
-                    data.get("event_id"),
-                    data.get("status"),
-                    data.get("payment_status"),
-                    data.get("currency"),
-                    data.get("amount_minor"),
-                    data.get("buyer_email"),
-                    data.get("buyer_name"),
-                    data["raw_payload_json"],
-                    data.get("nicky_payment_request_id"),
-                    data.get("nicky_bill_short_id"),
-                    data.get("nicky_receiver_short_id"),
-                    data.get("nicky_payment_url"),
-                    data.get("nicky_status"),
-                    data.get("ticket_tailor_confirmed_at"),
-                    data.get("ticket_tailor_tickets_voided_at"),
-                    data.get("ticket_tailor_void_reason"),
-                    data.get("created_at"),
-                    data.get("updated_at"),
-                ),
-            )
-
-    @staticmethod
-    def _ensure_column(
-        conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str
-    ) -> None:
-        columns = {
-            row["name"]
-            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        }
-        if column_name not in columns:
-            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+        run_migrations(self.database_url)
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
+    def connect(self) -> Iterator[DatabaseConnection]:
+        connection = self.engine.connect()
+        transaction = connection.begin()
         try:
-            yield conn
-            conn.commit()
+            yield DatabaseConnection(connection)
+            transaction.commit()
+        except Exception:
+            transaction.rollback()
+            raise
         finally:
-            conn.close()
+            connection.close()
+
+    @contextmanager
+    def _begin(self) -> Iterator[Connection]:
+        with self.engine.begin() as connection:
+            yield connection
 
     def upsert_tenant(self, tenant: TenantConfig) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO tenants(
-                  tenant_id, name, active, nicky_user_uuid, nicky_user_short_id, nicky_user_email,
-                  ticket_tailor_api_key,
-                  ticket_tailor_webhook_signing_secret, nicky_api_key,
-                  nicky_default_blockchain_asset_id, nicky_receiver_short_id,
-                  nicky_webhook_token, nicky_webhook_type,
-                  nicky_send_notification, owner_auth_subject
+        values = {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "active": bool(tenant.active),
+            "nicky_user_uuid": tenant.nicky_user_uuid,
+            "nicky_user_short_id": tenant.nicky_user_short_id,
+            "nicky_user_email": tenant.nicky_user_email,
+            "ticket_tailor_api_key": tenant.ticket_tailor_api_key,
+            "ticket_tailor_webhook_signing_secret": tenant.ticket_tailor_webhook_signing_secret,
+            "nicky_api_key": tenant.nicky_api_key,
+            "nicky_default_blockchain_asset_id": tenant.nicky_default_blockchain_asset_id,
+            "nicky_receiver_short_id": tenant.nicky_receiver_short_id,
+            "nicky_webhook_token": tenant.nicky_webhook_token,
+            "nicky_webhook_type": tenant.nicky_webhook_type,
+            "nicky_send_notification": bool(tenant.nicky_send_notification),
+            "owner_auth_subject": tenant.owner_auth_subject,
+        }
+        with self._begin() as conn:
+            exists = conn.execute(
+                select(tenants.c.tenant_id).where(tenants.c.tenant_id == tenant.tenant_id)
+            ).first()
+            if exists:
+                update_values = dict(values)
+                update_values.pop("tenant_id")
+                update_values["updated_at"] = func.now()
+                conn.execute(
+                    tenants.update()
+                    .where(tenants.c.tenant_id == tenant.tenant_id)
+                    .values(**update_values)
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tenant_id) DO UPDATE SET
-                  name = excluded.name,
-                  active = excluded.active,
-                  nicky_user_uuid = excluded.nicky_user_uuid,
-                  nicky_user_short_id = excluded.nicky_user_short_id,
-                  nicky_user_email = excluded.nicky_user_email,
-                  ticket_tailor_api_key = excluded.ticket_tailor_api_key,
-                  ticket_tailor_webhook_signing_secret = excluded.ticket_tailor_webhook_signing_secret,
-                  nicky_api_key = excluded.nicky_api_key,
-                  nicky_default_blockchain_asset_id = excluded.nicky_default_blockchain_asset_id,
-                  nicky_receiver_short_id = excluded.nicky_receiver_short_id,
-                  nicky_webhook_token = excluded.nicky_webhook_token,
-                  nicky_webhook_type = excluded.nicky_webhook_type,
-                  nicky_send_notification = excluded.nicky_send_notification,
-                  owner_auth_subject = excluded.owner_auth_subject,
-                  updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    tenant.tenant_id,
-                    tenant.name,
-                    int(tenant.active),
-                    tenant.nicky_user_uuid,
-                    tenant.nicky_user_short_id,
-                    tenant.nicky_user_email,
-                    tenant.ticket_tailor_api_key,
-                    tenant.ticket_tailor_webhook_signing_secret,
-                    tenant.nicky_api_key,
-                    tenant.nicky_default_blockchain_asset_id,
-                    tenant.nicky_receiver_short_id,
-                    tenant.nicky_webhook_token,
-                    tenant.nicky_webhook_type,
-                    int(tenant.nicky_send_notification),
-                    tenant.owner_auth_subject,
-                ),
-            )
+            else:
+                conn.execute(tenants.insert().values(**values))
 
     def deactivate_tenant(self, tenant_id: str) -> None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             conn.execute(
-                """
-                UPDATE tenants
-                SET active = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = ?
-                """,
-                (tenant_id,),
+                tenants.update()
+                .where(tenants.c.tenant_id == tenant_id)
+                .values(active=False, updated_at=func.now())
             )
 
     def find_active_tenant_by_api_key(
@@ -313,25 +220,21 @@ class Database:
             raise ValueError("Unsupported tenant API key column")
         if not api_key:
             return None
-        conditions = [f"{column} = ?", "active = 1"]
-        params: list[Any] = [api_key]
+        conditions = [tenants.c[column] == api_key, tenants.c.active == sa.true()]
         if exclude_tenant_id:
-            conditions.append("tenant_id != ?")
-            params.append(exclude_tenant_id)
-        with self.connect() as conn:
+            conditions.append(tenants.c.tenant_id != exclude_tenant_id)
+        with self._begin() as conn:
             row = conn.execute(
-                f"SELECT * FROM tenants WHERE {' AND '.join(conditions)} LIMIT 1",
-                params,
-            ).fetchone()
-        return tenant_from_row(row) if row else None
+                select(tenants).where(and_(*conditions)).limit(1)
+            ).mappings().first()
+        return tenant_from_row(record(row)) if row else None
 
     def get_tenant(self, tenant_id: str) -> TenantConfig | None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             row = conn.execute(
-                "SELECT * FROM tenants WHERE tenant_id = ?",
-                (tenant_id,),
-            ).fetchone()
-        return tenant_from_row(row) if row else None
+                select(tenants).where(tenants.c.tenant_id == tenant_id)
+            ).mappings().first()
+        return tenant_from_row(record(row)) if row else None
 
     def list_tenants(
         self,
@@ -344,24 +247,20 @@ class Database:
         nicky_user_uuid: str | None = None,
         owner_auth_subject: str | None = None,
     ) -> list[TenantConfig]:
-        with self.connect() as conn:
-            where_clause, params = self._tenant_filters(
-                query, active, configuration, nicky_user_uuid, owner_auth_subject
+        stmt = (
+            select(tenants)
+            .where(
+                *self._tenant_conditions(
+                    query, active, configuration, nicky_user_uuid, owner_auth_subject
+                )
             )
-            limit_clause = ""
-            if limit is not None:
-                limit_clause = "LIMIT ? OFFSET ?"
-                params.extend([max(1, limit), max(0, offset)])
-            rows = conn.execute(
-                f"""
-                SELECT * FROM tenants
-                {where_clause}
-                ORDER BY created_at DESC, tenant_id ASC
-                {limit_clause}
-                """,
-                params,
-            ).fetchall()
-        return [tenant_from_row(row) for row in rows]
+            .order_by(tenants.c.created_at.desc(), tenants.c.tenant_id.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(max(1, limit)).offset(max(0, offset))
+        with self._begin() as conn:
+            rows = conn.execute(stmt).mappings().fetchall()
+        return [tenant_from_row(row) for row in records(rows)]
 
     def count_tenants(
         self,
@@ -372,52 +271,59 @@ class Database:
         nicky_user_uuid: str | None = None,
         owner_auth_subject: str | None = None,
     ) -> int:
-        with self.connect() as conn:
-            where_clause, params = self._tenant_filters(
+        stmt = select(func.count()).select_from(tenants).where(
+            *self._tenant_conditions(
                 query, active, configuration, nicky_user_uuid, owner_auth_subject
             )
-            row = conn.execute(
-                f"SELECT COUNT(*) AS count FROM tenants {where_clause}",
-                params,
-            ).fetchone()
-            return int(row["count"] if row else 0)
+        )
+        with self._begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
 
     @staticmethod
-    def _tenant_filters(
+    def _tenant_conditions(
         query: str | None,
         active: str | None,
         configuration: str | None,
         nicky_user_uuid: str | None = None,
         owner_auth_subject: str | None = None,
-    ) -> tuple[str, list[Any]]:
-        conditions: list[str] = []
-        params: list[Any] = []
+    ) -> list[Any]:
+        conditions: list[Any] = []
         if query:
-            conditions.append(
-                "(tenant_id LIKE ? OR name LIKE ? OR nicky_user_uuid LIKE ? OR nicky_user_short_id LIKE ? OR nicky_user_email LIKE ?)"
-            )
             like = f"%{query}%"
-            params.extend([like, like, like, like, like])
+            conditions.append(
+                or_(
+                    tenants.c.tenant_id.like(like),
+                    tenants.c.name.like(like),
+                    tenants.c.nicky_user_uuid.like(like),
+                    tenants.c.nicky_user_short_id.like(like),
+                    tenants.c.nicky_user_email.like(like),
+                )
+            )
         if nicky_user_uuid:
-            conditions.append("nicky_user_uuid = ?")
-            params.append(nicky_user_uuid)
+            conditions.append(tenants.c.nicky_user_uuid == nicky_user_uuid)
         if owner_auth_subject:
-            conditions.append("owner_auth_subject = ?")
-            params.append(owner_auth_subject)
+            conditions.append(tenants.c.owner_auth_subject == owner_auth_subject)
         if active == "active":
-            conditions.append("active = 1")
+            conditions.append(tenants.c.active == sa.true())
         elif active == "inactive":
-            conditions.append("active = 0")
+            conditions.append(tenants.c.active == sa.false())
         if configuration == "complete":
-            conditions.append("ticket_tailor_api_key != ''")
-            conditions.append("nicky_api_key != ''")
-            conditions.append("nicky_default_blockchain_asset_id != ''")
+            conditions.extend(
+                [
+                    tenants.c.ticket_tailor_api_key != "",
+                    tenants.c.nicky_api_key != "",
+                    tenants.c.nicky_default_blockchain_asset_id != "",
+                ]
+            )
         elif configuration == "missing":
             conditions.append(
-                "(ticket_tailor_api_key = '' OR nicky_api_key = '' OR nicky_default_blockchain_asset_id = '')"
+                or_(
+                    tenants.c.ticket_tailor_api_key == "",
+                    tenants.c.nicky_api_key == "",
+                    tenants.c.nicky_default_blockchain_asset_id == "",
+                )
             )
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        return where_clause, params
+        return conditions
 
     def insert_webhook_event(
         self,
@@ -428,105 +334,101 @@ class Database:
         event_type: str,
         raw_body: bytes,
     ) -> bool:
-        with self.connect() as conn:
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO webhook_events(
-                      tenant_id, source, event_id, event_type, status, raw_body
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        tenant_id,
-                        source,
-                        event_id,
-                        event_type,
-                        "received",
-                        raw_body.decode("utf-8"),
-                    ),
+        with self._begin() as conn:
+            existing = conn.execute(
+                select(webhook_events.c.status).where(
+                    webhook_events.c.tenant_id == tenant_id,
+                    webhook_events.c.source == source,
+                    webhook_events.c.event_id == event_id,
                 )
-                return True
-            except sqlite3.IntegrityError:
-                row = conn.execute(
-                    """
-                    SELECT status FROM webhook_events
-                    WHERE tenant_id = ? AND source = ? AND event_id = ?
-                    """,
-                    (tenant_id, source, event_id),
-                ).fetchone()
-                if row and row["status"] == "failed":
+            ).mappings().first()
+            if existing:
+                if existing["status"] == "failed":
                     conn.execute(
-                        """
-                        UPDATE webhook_events
-                        SET event_type = ?,
-                            status = ?,
-                            raw_body = ?,
-                            error = NULL,
-                            processed_at = NULL,
-                            received_at = CURRENT_TIMESTAMP
-                        WHERE tenant_id = ? AND source = ? AND event_id = ?
-                        """,
-                        (
-                            event_type,
-                            "received",
-                            raw_body.decode("utf-8"),
-                            tenant_id,
-                            source,
-                            event_id,
-                        ),
+                        webhook_events.update()
+                        .where(
+                            webhook_events.c.tenant_id == tenant_id,
+                            webhook_events.c.source == source,
+                            webhook_events.c.event_id == event_id,
+                        )
+                        .values(
+                            event_type=event_type,
+                            status="received",
+                            raw_body=raw_body.decode("utf-8"),
+                            error=None,
+                            processed_at=None,
+                            received_at=func.now(),
+                        )
                     )
                     return True
                 return False
+            conn.execute(
+                webhook_events.insert().values(
+                    tenant_id=tenant_id,
+                    source=source,
+                    event_id=event_id,
+                    event_type=event_type,
+                    status="received",
+                    raw_body=raw_body.decode("utf-8"),
+                )
+            )
+            return True
 
     def mark_webhook_event(
         self, tenant_id: str, source: str, event_id: str, status: str, error: str = ""
     ) -> None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             conn.execute(
-                """
-                UPDATE webhook_events
-                SET status = ?, error = ?, processed_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = ? AND source = ? AND event_id = ?
-                """,
-                (status, error or None, tenant_id, source, event_id),
+                webhook_events.update()
+                .where(
+                    webhook_events.c.tenant_id == tenant_id,
+                    webhook_events.c.source == source,
+                    webhook_events.c.event_id == event_id,
+                )
+                .values(status=status, error=error or None, processed_at=func.now())
             )
 
     def upsert_order(
         self, tenant_id: str, order: dict[str, Any], raw_payload: dict[str, Any]
     ) -> None:
-        with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO integration_orders(
-                  tenant_id, ticket_tailor_order_id, event_id, status, payment_status,
-                  currency, amount_minor, buyer_email, buyer_name, raw_payload_json
+        key = {
+            "tenant_id": tenant_id,
+            "ticket_tailor_order_id": order["ticket_tailor_order_id"],
+        }
+        values = {
+            **key,
+            "event_id": order.get("event_id"),
+            "status": order.get("status"),
+            "payment_status": order.get("payment_status"),
+            "currency": order.get("currency"),
+            "amount_minor": order.get("amount_minor"),
+            "buyer_email": order.get("buyer_email"),
+            "buyer_name": order.get("buyer_name"),
+            "raw_payload_json": json.dumps(raw_payload, separators=(",", ":"), ensure_ascii=False),
+        }
+        with self._begin() as conn:
+            exists = conn.execute(
+                select(integration_orders.c.ticket_tailor_order_id).where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.ticket_tailor_order_id == order["ticket_tailor_order_id"],
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tenant_id, ticket_tailor_order_id) DO UPDATE SET
-                  event_id = excluded.event_id,
-                  status = excluded.status,
-                  payment_status = excluded.payment_status,
-                  currency = excluded.currency,
-                  amount_minor = excluded.amount_minor,
-                  buyer_email = excluded.buyer_email,
-                  buyer_name = excluded.buyer_name,
-                  raw_payload_json = excluded.raw_payload_json,
-                  updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    tenant_id,
-                    order["ticket_tailor_order_id"],
-                    order.get("event_id"),
-                    order.get("status"),
-                    order.get("payment_status"),
-                    order.get("currency"),
-                    order.get("amount_minor"),
-                    order.get("buyer_email"),
-                    order.get("buyer_name"),
-                    json.dumps(raw_payload, separators=(",", ":"), ensure_ascii=False),
-                ),
-            )
+            ).first()
+            if exists:
+                update_values = dict(values)
+                update_values.pop("tenant_id")
+                update_values.pop("ticket_tailor_order_id")
+                update_values["updated_at"] = func.now()
+                conn.execute(
+                    integration_orders.update()
+                    .where(
+                        integration_orders.c.tenant_id == tenant_id,
+                        integration_orders.c.ticket_tailor_order_id
+                        == order["ticket_tailor_order_id"],
+                    )
+                    .values(**update_values)
+                )
+            else:
+                conn.execute(integration_orders.insert().values(**values))
 
     def update_nicky_payment_request(
         self,
@@ -539,120 +441,114 @@ class Database:
         payment_url: str | None,
         status: str | None,
     ) -> None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             conn.execute(
-                """
-                UPDATE integration_orders
-                SET nicky_payment_request_id = ?,
-                    nicky_bill_short_id = ?,
-                    nicky_receiver_short_id = ?,
-                    nicky_payment_url = ?,
-                    nicky_status = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = ? AND ticket_tailor_order_id = ?
-                """,
-                (
-                    payment_request_id,
-                    bill_short_id,
-                    receiver_short_id,
-                    payment_url,
-                    status,
-                    tenant_id,
-                    ticket_tailor_order_id,
-                ),
+                integration_orders.update()
+                .where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.ticket_tailor_order_id == ticket_tailor_order_id,
+                )
+                .values(
+                    nicky_payment_request_id=payment_request_id,
+                    nicky_bill_short_id=bill_short_id,
+                    nicky_receiver_short_id=receiver_short_id,
+                    nicky_payment_url=payment_url,
+                    nicky_status=status,
+                    updated_at=func.now(),
+                )
             )
 
     def update_nicky_status(
         self, tenant_id: str, payment_request_id: str, status: str
-    ) -> sqlite3.Row | None:
-        with self.connect() as conn:
+    ) -> Record | None:
+        with self._begin() as conn:
             row = conn.execute(
-                """
-                SELECT * FROM integration_orders
-                WHERE tenant_id = ? AND nicky_payment_request_id = ?
-                """,
-                (tenant_id, payment_request_id),
-            ).fetchone()
+                select(integration_orders).where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.nicky_payment_request_id == payment_request_id,
+                )
+            ).mappings().first()
             if not row:
                 return None
             conn.execute(
-                """
-                UPDATE integration_orders
-                SET nicky_status = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = ? AND nicky_payment_request_id = ?
-                """,
-                (status, tenant_id, payment_request_id),
+                integration_orders.update()
+                .where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.nicky_payment_request_id == payment_request_id,
+                )
+                .values(nicky_status=status, updated_at=func.now())
             )
-            return row
+            return record(row)
 
     def mark_ticket_tailor_confirmed(self, tenant_id: str, ticket_tailor_order_id: str) -> None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             conn.execute(
-                """
-                UPDATE integration_orders
-                SET ticket_tailor_confirmed_at = CURRENT_TIMESTAMP,
-                    payment_status = 'confirmed',
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = ? AND ticket_tailor_order_id = ?
-                """,
-                (tenant_id, ticket_tailor_order_id),
+                integration_orders.update()
+                .where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.ticket_tailor_order_id == ticket_tailor_order_id,
+                )
+                .values(
+                    ticket_tailor_confirmed_at=func.now(),
+                    payment_status="confirmed",
+                    updated_at=func.now(),
+                )
             )
 
     def mark_ticket_tailor_tickets_voided(
         self, tenant_id: str, ticket_tailor_order_id: str, reason: str
     ) -> None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             conn.execute(
-                """
-                UPDATE integration_orders
-                SET ticket_tailor_tickets_voided_at = CURRENT_TIMESTAMP,
-                    ticket_tailor_void_reason = ?,
-                    payment_status = 'voided',
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = ? AND ticket_tailor_order_id = ?
-                """,
-                (reason, tenant_id, ticket_tailor_order_id),
+                integration_orders.update()
+                .where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.ticket_tailor_order_id == ticket_tailor_order_id,
+                )
+                .values(
+                    ticket_tailor_tickets_voided_at=func.now(),
+                    ticket_tailor_void_reason=reason,
+                    payment_status="voided",
+                    updated_at=func.now(),
+                )
             )
 
     def list_expirable_orders(
         self, *, expiration_hours: float, limit: int, tenant_id: str | None = None
-    ) -> list[sqlite3.Row]:
+    ) -> list[Record]:
         if expiration_hours <= 0:
             return []
-        resolved_limit = max(1, limit)
-        cutoff = f"-{expiration_hours} hours"
-        with self.connect() as conn:
-            params: list[Any] = [cutoff]
-            tenant_filter = ""
-            if tenant_id:
-                tenant_filter = "AND tenant_id = ?"
-                params.append(tenant_id)
-            params.append(resolved_limit)
-            return list(
-                conn.execute(
-                    f"""
-                    SELECT * FROM integration_orders
-                    WHERE ticket_tailor_confirmed_at IS NULL
-                      AND ticket_tailor_tickets_voided_at IS NULL
-                      AND LOWER(COALESCE(nicky_status, '')) != 'finished'
-                      AND datetime(created_at) <= datetime('now', ?)
-                      {tenant_filter}
-                    ORDER BY created_at ASC, tenant_id ASC, ticket_tailor_order_id ASC
-                    LIMIT ?
-                    """,
-                    params,
-                ).fetchall()
+        cutoff = utc_now() - timedelta(hours=expiration_hours)
+        conditions = [
+            integration_orders.c.ticket_tailor_confirmed_at.is_(None),
+            integration_orders.c.ticket_tailor_tickets_voided_at.is_(None),
+            func.lower(func.coalesce(integration_orders.c.nicky_status, "")) != "finished",
+            integration_orders.c.created_at <= cutoff,
+        ]
+        if tenant_id:
+            conditions.append(integration_orders.c.tenant_id == tenant_id)
+        stmt = (
+            select(integration_orders)
+            .where(*conditions)
+            .order_by(
+                integration_orders.c.created_at.asc(),
+                integration_orders.c.tenant_id.asc(),
+                integration_orders.c.ticket_tailor_order_id.asc(),
             )
+            .limit(max(1, limit))
+        )
+        with self._begin() as conn:
+            return records(conn.execute(stmt).mappings().fetchall())
 
-    def get_order(self, tenant_id: str, ticket_tailor_order_id: str) -> sqlite3.Row | None:
-        with self.connect() as conn:
-            return conn.execute(
-                """
-                SELECT * FROM integration_orders
-                WHERE tenant_id = ? AND ticket_tailor_order_id = ?
-                """,
-                (tenant_id, ticket_tailor_order_id),
-            ).fetchone()
+    def get_order(self, tenant_id: str, ticket_tailor_order_id: str) -> Record | None:
+        with self._begin() as conn:
+            row = conn.execute(
+                select(integration_orders).where(
+                    integration_orders.c.tenant_id == tenant_id,
+                    integration_orders.c.ticket_tailor_order_id == ticket_tailor_order_id,
+                )
+            ).mappings().first()
+        return record(row)
 
     def list_orders(
         self,
@@ -662,23 +558,16 @@ class Database:
         updated_from: str | None = None,
         updated_to: str | None = None,
         order_state: str | None = None,
-    ) -> list[sqlite3.Row]:
-        with self.connect() as conn:
-            where_clause, params = self._order_filters(
-                tenant_id, updated_from, updated_to, order_state
-            )
-            params.extend([max(1, limit), max(0, offset)])
-            return list(
-                conn.execute(
-                    f"""
-                    SELECT * FROM integration_orders
-                    {where_clause}
-                    ORDER BY updated_at DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    params,
-                ).fetchall()
-            )
+    ) -> list[Record]:
+        stmt = (
+            select(integration_orders)
+            .where(*self._order_conditions(tenant_id, updated_from, updated_to, order_state))
+            .order_by(integration_orders.c.updated_at.desc())
+            .limit(max(1, limit))
+            .offset(max(0, offset))
+        )
+        with self._begin() as conn:
+            return records(conn.execute(stmt).mappings().fetchall())
 
     def count_orders(
         self,
@@ -688,43 +577,36 @@ class Database:
         updated_to: str | None = None,
         order_state: str | None = None,
     ) -> int:
-        with self.connect() as conn:
-            where_clause, params = self._order_filters(
-                tenant_id, updated_from, updated_to, order_state
-            )
-            row = conn.execute(
-                f"SELECT COUNT(*) AS count FROM integration_orders {where_clause}",
-                params,
-            ).fetchone()
-            return int(row["count"] if row else 0)
+        stmt = select(func.count()).select_from(integration_orders).where(
+            *self._order_conditions(tenant_id, updated_from, updated_to, order_state)
+        )
+        with self._begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
 
     @staticmethod
-    def _order_filters(
+    def _order_conditions(
         tenant_id: str | None,
         updated_from: str | None,
         updated_to: str | None,
         order_state: str | None,
-    ) -> tuple[str, list[Any]]:
-        conditions: list[str] = []
-        params: list[Any] = []
+    ) -> list[Any]:
+        conditions: list[Any] = []
         if tenant_id:
-            conditions.append("tenant_id = ?")
-            params.append(tenant_id)
-        if updated_from:
-            conditions.append("date(updated_at) >= date(?)")
-            params.append(updated_from)
-        if updated_to:
-            conditions.append("date(updated_at) <= date(?)")
-            params.append(updated_to)
+            conditions.append(integration_orders.c.tenant_id == tenant_id)
+        from_date = date_start(updated_from)
+        if from_date:
+            conditions.append(integration_orders.c.updated_at >= from_date)
+        to_date = date_end_exclusive(updated_to)
+        if to_date:
+            conditions.append(integration_orders.c.updated_at < to_date)
         if order_state == "confirmed":
-            conditions.append("ticket_tailor_confirmed_at IS NOT NULL")
+            conditions.append(integration_orders.c.ticket_tailor_confirmed_at.is_not(None))
         elif order_state == "tickets_voided":
-            conditions.append("ticket_tailor_tickets_voided_at IS NOT NULL")
+            conditions.append(integration_orders.c.ticket_tailor_tickets_voided_at.is_not(None))
         elif order_state == "pending":
-            conditions.append("ticket_tailor_confirmed_at IS NULL")
-            conditions.append("ticket_tailor_tickets_voided_at IS NULL")
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        return where_clause, params
+            conditions.append(integration_orders.c.ticket_tailor_confirmed_at.is_(None))
+            conditions.append(integration_orders.c.ticket_tailor_tickets_voided_at.is_(None))
+        return conditions
 
     def list_webhook_events(
         self,
@@ -734,25 +616,25 @@ class Database:
         received_from: str | None = None,
         received_to: str | None = None,
         status: str | None = None,
-    ) -> list[sqlite3.Row]:
-        with self.connect() as conn:
-            where_clause, params = self._webhook_filters(
-                tenant_id, received_from, received_to, status
+    ) -> list[Record]:
+        stmt = (
+            select(
+                webhook_events.c.tenant_id,
+                webhook_events.c.source,
+                webhook_events.c.event_id,
+                webhook_events.c.event_type,
+                webhook_events.c.received_at,
+                webhook_events.c.processed_at,
+                webhook_events.c.status,
+                webhook_events.c.error,
             )
-            params.extend([max(1, limit), max(0, offset)])
-            return list(
-                conn.execute(
-                    f"""
-                    SELECT tenant_id, source, event_id, event_type, received_at,
-                           processed_at, status, error
-                    FROM webhook_events
-                    {where_clause}
-                    ORDER BY received_at DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    params,
-                ).fetchall()
-            )
+            .where(*self._webhook_conditions(tenant_id, received_from, received_to, status))
+            .order_by(webhook_events.c.received_at.desc())
+            .limit(max(1, limit))
+            .offset(max(0, offset))
+        )
+        with self._begin() as conn:
+            return records(conn.execute(stmt).mappings().fetchall())
 
     def count_webhook_events(
         self,
@@ -762,39 +644,31 @@ class Database:
         received_to: str | None = None,
         status: str | None = None,
     ) -> int:
-        with self.connect() as conn:
-            where_clause, params = self._webhook_filters(
-                tenant_id, received_from, received_to, status
-            )
-            row = conn.execute(
-                f"SELECT COUNT(*) AS count FROM webhook_events {where_clause}",
-                params,
-            ).fetchone()
-            return int(row["count"] if row else 0)
+        stmt = select(func.count()).select_from(webhook_events).where(
+            *self._webhook_conditions(tenant_id, received_from, received_to, status)
+        )
+        with self._begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
 
     @staticmethod
-    def _webhook_filters(
+    def _webhook_conditions(
         tenant_id: str | None,
         received_from: str | None,
         received_to: str | None,
         status: str | None,
-    ) -> tuple[str, list[Any]]:
-        conditions: list[str] = []
-        params: list[Any] = []
+    ) -> list[Any]:
+        conditions: list[Any] = []
         if tenant_id:
-            conditions.append("tenant_id = ?")
-            params.append(tenant_id)
-        if received_from:
-            conditions.append("date(received_at) >= date(?)")
-            params.append(received_from)
-        if received_to:
-            conditions.append("date(received_at) <= date(?)")
-            params.append(received_to)
+            conditions.append(webhook_events.c.tenant_id == tenant_id)
+        from_date = date_start(received_from)
+        if from_date:
+            conditions.append(webhook_events.c.received_at >= from_date)
+        to_date = date_end_exclusive(received_to)
+        if to_date:
+            conditions.append(webhook_events.c.received_at < to_date)
         if status:
-            conditions.append("status = ?")
-            params.append(status)
-        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        return where_clause, params
+            conditions.append(webhook_events.c.status == status)
+        return conditions
 
     def list_order_logs(
         self,
@@ -802,33 +676,39 @@ class Database:
         ticket_tailor_order_id: str,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[sqlite3.Row]:
-        with self.connect() as conn:
-            return list(
-                conn.execute(
-                    """
-                    SELECT id, tenant_id, ticket_tailor_order_id, event_type, message,
-                           payload_json, created_at
-                    FROM order_logs
-                    WHERE tenant_id = ? AND ticket_tailor_order_id = ?
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    (tenant_id, ticket_tailor_order_id, max(1, limit), max(0, offset)),
-                ).fetchall()
+    ) -> list[Record]:
+        stmt = (
+            select(
+                order_logs.c.id,
+                order_logs.c.tenant_id,
+                order_logs.c.ticket_tailor_order_id,
+                order_logs.c.event_type,
+                order_logs.c.message,
+                order_logs.c.payload_json,
+                order_logs.c.created_at,
             )
+            .where(
+                order_logs.c.tenant_id == tenant_id,
+                order_logs.c.ticket_tailor_order_id == ticket_tailor_order_id,
+            )
+            .order_by(order_logs.c.created_at.desc(), order_logs.c.id.desc())
+            .limit(max(1, limit))
+            .offset(max(0, offset))
+        )
+        with self._begin() as conn:
+            return records(conn.execute(stmt).mappings().fetchall())
 
     def count_order_logs(self, tenant_id: str, ticket_tailor_order_id: str) -> int:
-        with self.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM order_logs
-                WHERE tenant_id = ? AND ticket_tailor_order_id = ?
-                """,
-                (tenant_id, ticket_tailor_order_id),
-            ).fetchone()
-            return int(row["count"] if row else 0)
+        stmt = (
+            select(func.count())
+            .select_from(order_logs)
+            .where(
+                order_logs.c.tenant_id == tenant_id,
+                order_logs.c.ticket_tailor_order_id == ticket_tailor_order_id,
+            )
+        )
+        with self._begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
 
     def log(
         self,
@@ -838,21 +718,25 @@ class Database:
         message: str,
         payload: dict[str, Any] | None = None,
     ) -> None:
-        with self.connect() as conn:
+        with self._begin() as conn:
             conn.execute(
-                """
-                INSERT INTO order_logs(
-                  tenant_id, ticket_tailor_order_id, event_type, message, payload_json
+                order_logs.insert().values(
+                    tenant_id=tenant_id,
+                    ticket_tailor_order_id=ticket_tailor_order_id,
+                    event_type=event_type,
+                    message=message,
+                    payload_json=(
+                        json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+                        if payload is not None
+                        else None
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    tenant_id,
-                    ticket_tailor_order_id,
-                    event_type,
-                    message,
-                    json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-                    if payload is not None
-                    else None,
-                ),
             )
+
+
+def normalize_sqlserver_url(url: str) -> str:
+    # Reserved for future URL normalization without touching callers.
+    return url
+
+
+_QUESTION_MARK_RE = re.compile(r"\?")

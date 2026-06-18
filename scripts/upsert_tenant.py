@@ -55,7 +55,7 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = get_settings()
-    db = Database(settings.database_path)
+    db = Database(settings.resolved_database_url)
     db.init()
 
     tenant_id = normalize_tenant_id(args.tenant_id)

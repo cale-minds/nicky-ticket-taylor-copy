@@ -62,6 +62,7 @@ Important variables in `.env`:
 APP_BASE_URL=http://localhost:8017
 API_BASE_PATH=/api
 ADMIN_API_BASE_PATH=/api
+DATABASE_URL=
 DATABASE_PATH=./data/integration.sqlite3
 ADMIN_SESSION_SECRET=change-this-in-production
 ADMIN_SESSION_MAX_AGE_SECONDS=28800
@@ -75,6 +76,26 @@ ADMIN_ALLOWED_ROLES=Admin
 NICKY_API_BASE_URL=https://api-public.pay.nicky.me
 NICKY_PAY_BASE_URL=https://pay.nicky.me
 ```
+
+Use `DATABASE_URL` for deployed environments. If it is empty, the service falls back to
+SQLite using `DATABASE_PATH`.
+
+Examples:
+
+```dotenv
+# Local fallback
+DATABASE_PATH=./data/integration.sqlite3
+
+# MySQL
+DATABASE_URL=mysql+pymysql://user:password@host:3306/database_name
+
+# SQL Server
+DATABASE_URL=mssql+pyodbc://user:password@host:1433/database_name?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+```
+
+The application runs Alembic migrations automatically during startup.
+MySQL uses the bundled `PyMySQL` driver. SQL Server requires the `mssql` extra plus an
+ODBC driver available in the runtime image.
 
 The Nicky Short ID is saved from the validated Nicky API key and is used to build the hosted payment URL:
 
@@ -110,9 +131,10 @@ AUTH0_CLIENT_SECRET=
 AUTH0_AUDIENCE=
 ADMIN_ALLOWED_ROLES=Admin
 ADMIN_SESSION_SECRET=choose-a-long-random-session-secret
+DATABASE_URL=mysql+pymysql://user:password@host:3306/database_name
 ```
 
-Keep real Ticket Tailor and Nicky credentials in Vercel environment variables or in tenant records created through the Admin UI. The deploy does not use fake or mocked integrations.
+Keep real Ticket Tailor and Nicky credentials in tenant records created through the Admin UI. The deploy does not use fake or mocked integrations.
 
 Add this callback URL to the Auth0 application:
 
