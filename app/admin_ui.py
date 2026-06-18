@@ -35,7 +35,7 @@ from app.tenants import (
 
 AdminDependency = Callable[..., Any]
 DEFAULT_PAGE_SIZE = 10
-DASHBOARD_PAGE_SIZE = 5
+DASHBOARD_PAGE_SIZE = 10
 NO_TENANT_SCOPE = "__nicky_no_tenant_scope__"
 
 
@@ -172,27 +172,30 @@ def create_admin_ui_router(
         tenants_page_number = page_query_value(request.query_params.get("tenants_page"))
         orders_page_number = page_query_value(request.query_params.get("orders_page"))
         webhooks_page_number = page_query_value(request.query_params.get("webhooks_page"))
+        tenants_page_size = page_size_query_value(request.query_params.get("tenants_per_page"), DASHBOARD_PAGE_SIZE)
+        orders_page_size = page_size_query_value(request.query_params.get("orders_per_page"), DASHBOARD_PAGE_SIZE)
+        webhooks_page_size = page_size_query_value(request.query_params.get("webhooks_per_page"), DASHBOARD_PAGE_SIZE)
         tenants_total = db.count_tenants(**tenant_scope.tenant_filters)
         orders_total = db.count_orders(**order_filters)
         webhooks_total = db.count_webhook_events(**webhook_filters)
         dashboard_tenants = db.list_tenants(
-            limit=DASHBOARD_PAGE_SIZE,
-            offset=page_offset(tenants_page_number, DASHBOARD_PAGE_SIZE),
+            limit=tenants_page_size,
+            offset=page_offset(tenants_page_number, tenants_page_size),
             **tenant_scope.tenant_filters,
         )
         orders = [
             row_to_dict(row)
             for row in db.list_orders(
-                limit=DASHBOARD_PAGE_SIZE,
-                offset=page_offset(orders_page_number, DASHBOARD_PAGE_SIZE),
+                limit=orders_page_size,
+                offset=page_offset(orders_page_number, orders_page_size),
                 **order_filters,
             )
         ]
         webhooks = [
             dict(row)
             for row in db.list_webhook_events(
-                limit=DASHBOARD_PAGE_SIZE,
-                offset=page_offset(webhooks_page_number, DASHBOARD_PAGE_SIZE),
+                limit=webhooks_page_size,
+                offset=page_offset(webhooks_page_number, webhooks_page_size),
                 **webhook_filters,
             )
         ]
@@ -209,7 +212,7 @@ def create_admin_ui_router(
           <h2 class="mb-3 text-lg font-semibold text-slate-950">{t("DASHBOARD.CUSTOMER_CONNECTIONS")}</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {tenant_table(dashboard_tenants, user=user, settings=settings, framed=False)}
-            {pagination_controls(tenants_page_number, DASHBOARD_PAGE_SIZE, tenants_total, "/overview", request.query_params, "tenants_page")}
+            {pagination_controls(tenants_page_number, tenants_page_size, tenants_total, "/overview", request.query_params, "tenants_page", size_param="tenants_per_page", size_options=PAGE_SIZE_OPTIONS)}
           </div>
         </section>
         <div id="dash-filter-sections">
@@ -218,7 +221,7 @@ def create_admin_ui_router(
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
             {webhook_table(webhooks)}
-            {pagination_controls(webhooks_page_number, DASHBOARD_PAGE_SIZE, webhooks_total, "/overview", request.query_params, "webhooks_page")}
+            {pagination_controls(webhooks_page_number, webhooks_page_size, webhooks_total, "/overview", request.query_params, "webhooks_page", size_param="webhooks_per_page", size_options=PAGE_SIZE_OPTIONS)}
           </div>
         </section>
         <section class="mb-7 min-w-0">
@@ -226,7 +229,7 @@ def create_admin_ui_router(
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
             {orders_table(orders)}
-            {pagination_controls(orders_page_number, DASHBOARD_PAGE_SIZE, orders_total, "/overview", request.query_params, "orders_page")}
+            {pagination_controls(orders_page_number, orders_page_size, orders_total, "/overview", request.query_params, "orders_page", size_param="orders_per_page", size_options=PAGE_SIZE_OPTIONS)}
           </div>
         </section>
         </div>
