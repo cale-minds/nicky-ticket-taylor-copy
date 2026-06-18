@@ -74,6 +74,7 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     run_background_jobs: bool = _bool_env("RUN_BACKGROUND_JOBS", False)
     job_runner_token: str = os.getenv("JOB_RUNNER_TOKEN", "")
+    cron_secret: str = os.getenv("CRON_SECRET", "")
 
     ticket_tailor_api_key: str = os.getenv("TICKET_TAILOR_API_KEY", "")
     ticket_tailor_webhook_signing_secret: str = ""

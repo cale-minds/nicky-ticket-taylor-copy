@@ -154,7 +154,7 @@ def require_admin_role(user: admin_auth.AdminUser) -> None:
 
 
 def require_job_runner(authorization: str | None = Header(default=None)) -> None:
-    if not settings.job_runner_token:
+    if not settings.job_runner_token and not settings.cron_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Job runner token is not configured",
@@ -416,7 +416,7 @@ async def health() -> dict[str, Any]:
             settings.ticket_tailor_expiration_batch_size
         ),
         "run_background_jobs": settings.run_background_jobs,
-        "job_runner_token_configured": bool(settings.job_runner_token),
+        "job_runner_token_configured": bool(settings.job_runner_token or settings.cron_secret),
         "nicky_configured_tenant_count": sum(tenant.nicky_configured for tenant in tenants),
         "ticket_tailor_configured_tenant_count": sum(
             tenant.ticket_tailor_configured for tenant in tenants
@@ -749,7 +749,7 @@ async def admin_expire_overdue_orders(
     )
 
 
-@app.post("/jobs/expire-overdue-orders")
+@app.api_route("/jobs/expire-overdue-orders", methods=["GET", "POST"])
 async def job_expire_overdue_orders(
     _: None = Depends(require_job_runner),
     tenant_id: str | None = Query(default=None),

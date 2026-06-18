@@ -34,5 +34,11 @@
       "src": "^/api(?:/.*)?$",
       "dest": "/api/index.py"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/jobs/expire-overdue-orders",
+      "schedule": "0 * * * *"
+    }
   ]
 }

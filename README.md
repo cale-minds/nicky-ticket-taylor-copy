@@ -66,6 +66,7 @@ DATABASE_URL=
 DATABASE_PATH=./data/integration.sqlite3
 RUN_BACKGROUND_JOBS=false
 JOB_RUNNER_TOKEN=
+CRON_SECRET=
 ADMIN_SESSION_SECRET=change-this-in-production
 ADMIN_SESSION_MAX_AGE_SECONDS=28800
 AUTH0_DOMAIN=
@@ -101,7 +102,9 @@ ODBC driver available in the runtime image.
 
 Use `RUN_BACKGROUND_JOBS=true` only on a persistent process where the FastAPI app stays
 alive. On serverless hosts, keep it `false` and call the job endpoint or CLI from a
-scheduler. `JOB_RUNNER_TOKEN` protects `/api/jobs/...` endpoints used by schedulers.
+scheduler. `JOB_RUNNER_TOKEN` protects `/api/jobs/...` endpoints used by generic
+schedulers. Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`, so configure
+`CRON_SECRET` on Vercel; it can use the same value as `JOB_RUNNER_TOKEN`.
 
 The Nicky Short ID is saved from the validated Nicky API key and is used to build the hosted payment URL:
 
@@ -481,6 +484,7 @@ TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS=4
 TICKET_TAILOR_EXPIRATION_CHECK_INTERVAL_SECONDS=300
 TICKET_TAILOR_EXPIRATION_BATCH_SIZE=100
 JOB_RUNNER_TOKEN=change-this-token
+CRON_SECRET=change-this-token
 RUN_BACKGROUND_JOBS=false
 ```
 
@@ -491,6 +495,27 @@ The expiration runner is portable and is not tied to one host:
 - Serverless hosts such as Vercel: keep `RUN_BACKGROUND_JOBS=false` and call the job endpoint from an external scheduler.
 - Persistent servers, Docker, or a VM: set `RUN_BACKGROUND_JOBS=true` if you want the FastAPI process to run the loop internally.
 - GitHub Actions or another scheduler: call the HTTP job endpoint, or run the CLI if the runner has direct access to the application environment.
+
+Vercel Cron is configured in `vercel.json`:
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/jobs/expire-overdue-orders",
+      "schedule": "0 * * * *"
+    }
+  ]
+}
+```
+
+This schedule runs once per hour. After redeploying, check it in Vercel under the
+project dashboard's Cron/Functions area, and confirm executions in Logs by searching
+for:
+
+```text
+/api/jobs/expire-overdue-orders
+```
 
 HTTP job endpoint:
 

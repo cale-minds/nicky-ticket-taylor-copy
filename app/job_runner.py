@@ -11,12 +11,15 @@ from app.ticket_tailor import TicketTailorClient
 
 
 def is_authorized_job_request(settings: Settings, authorization: str | None) -> bool:
-    if not settings.job_runner_token:
+    valid_tokens = [
+        token for token in (settings.job_runner_token, settings.cron_secret) if token
+    ]
+    if not valid_tokens:
         return False
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token:
         return False
-    return secrets.compare_digest(token, settings.job_runner_token)
+    return any(secrets.compare_digest(token, valid_token) for valid_token in valid_tokens)
 
 
 async def run_expire_overdue_orders(

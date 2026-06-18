@@ -13,6 +13,13 @@ def test_job_runner_requires_matching_bearer_token() -> None:
     assert is_authorized_job_request(settings, None) is False
 
 
+def test_job_runner_accepts_vercel_cron_secret() -> None:
+    settings = Settings(cron_secret="vercel-secret")
+
+    assert is_authorized_job_request(settings, "Bearer vercel-secret") is True
+    assert is_authorized_job_request(settings, "Bearer wrong-token") is False
+
+
 def test_job_runner_is_disabled_when_token_is_not_configured() -> None:
     settings = Settings(job_runner_token="")
 
