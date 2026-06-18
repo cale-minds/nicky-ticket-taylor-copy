@@ -103,8 +103,8 @@ ODBC driver available in the runtime image.
 Use `RUN_BACKGROUND_JOBS=true` only on a persistent process where the FastAPI app stays
 alive. On serverless hosts, keep it `false` and call the job endpoint or CLI from a
 scheduler. `JOB_RUNNER_TOKEN` protects `/api/jobs/...` endpoints used by generic
-schedulers. Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`, so configure
-`CRON_SECRET` on Vercel; it can use the same value as `JOB_RUNNER_TOKEN`.
+schedulers such as GitHub Actions. `CRON_SECRET` is optional and only needed if this
+job is later moved to Vercel Cron on a plan that supports the required frequency.
 
 The Nicky Short ID is saved from the validated Nicky API key and is used to build the hosted payment URL:
 
@@ -492,7 +492,7 @@ RUN_BACKGROUND_JOBS=false
 
 The expiration runner is portable and is not tied to one host:
 
-- Serverless hosts such as Vercel: keep `RUN_BACKGROUND_JOBS=false` and call the job endpoint from an external scheduler.
+- Serverless hosts such as Vercel: keep `RUN_BACKGROUND_JOBS=false` and call the job endpoint from Vercel Cron or another scheduler.
 - Persistent servers, Docker, or a VM: set `RUN_BACKGROUND_JOBS=true` if you want the FastAPI process to run the loop internally.
 - GitHub Actions or another scheduler: call the HTTP job endpoint, or run the CLI if the runner has direct access to the application environment.
 
@@ -503,15 +503,20 @@ Vercel Cron is configured in `vercel.json`:
   "crons": [
     {
       "path": "/api/jobs/expire-overdue-orders",
-      "schedule": "0 * * * *"
+      "schedule": "0 3 * * *"
     }
   ]
 }
 ```
 
-This schedule runs once per hour. After redeploying, check it in Vercel under the
-project dashboard's Cron/Functions area, and confirm executions in Logs by searching
-for:
+Vercel schedules use UTC. `0 3 * * *` runs once per day at 03:00 UTC, which is
+00:00 in Sao Paulo/Brasilia time. Configure this Vercel environment variable:
+
+```text
+CRON_SECRET=<same value as JOB_RUNNER_TOKEN>
+```
+
+Then check executions in Vercel Logs by searching for:
 
 ```text
 /api/jobs/expire-overdue-orders

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -33,6 +34,11 @@ from app.ticket_tailor import TicketTailorClient
 
 
 settings = get_settings()
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("nicky_ticket_tailor")
 db = Database(settings.resolved_database_url)
 nicky_client = NickyClient(settings)
 ticket_tailor_client = TicketTailorClient(settings)
@@ -49,10 +55,11 @@ async def expire_overdue_orders_loop() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            await service.expire_overdue_orders()
+            result = await service.expire_overdue_orders()
+            logger.info("expire_overdue_orders.background %s", job_log_payload(result))
         except Exception:
             # Keep the webhook service alive even if one expiration pass fails.
-            pass
+            logger.exception("expire_overdue_orders.background_failed")
 
 
 class TenantUpsertRequest(BaseModel):
@@ -131,6 +138,19 @@ def model_data(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(exclude_unset=True)
     return model.dict(exclude_unset=True)
+
+
+def job_log_payload(result: dict[str, Any], **extra: Any) -> str:
+    payload = {
+        "status": result.get("status"),
+        "expiration_hours": result.get("expiration_hours"),
+        "batch_size": result.get("batch_size"),
+        "selected_count": result.get("selected_count", 0),
+        "expired_count": result.get("expired_count", 0),
+        "failed_count": result.get("failed_count", 0),
+        **extra,
+    }
+    return json.dumps(payload, sort_keys=True, default=str)
 
 
 def require_admin(
@@ -756,11 +776,22 @@ async def job_expire_overdue_orders(
     expiration_hours: float | None = Query(default=None),
     batch_size: int | None = Query(default=None),
 ) -> dict[str, Any]:
+    logger.info(
+        "expire_overdue_orders.job_started %s",
+        json.dumps(
+            {
+                "tenant_id": tenant_id,
+                "expiration_hours": expiration_hours,
+                "batch_size": batch_size,
+            },
+            sort_keys=True,
+        ),
+    )
     try:
         normalized_tenant_id = normalize_tenant_id(tenant_id) if tenant_id else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return await run_expire_overdue_orders(
+    result = await run_expire_overdue_orders(
         settings=settings,
         db=db,
         service=service,
@@ -768,6 +799,11 @@ async def job_expire_overdue_orders(
         expiration_hours=expiration_hours,
         batch_size=batch_size,
     )
+    logger.info(
+        "expire_overdue_orders.job_completed %s",
+        job_log_payload(result, tenant_id=normalized_tenant_id),
+    )
+    return result
 
 
 @app.post("/admin/nicky/webhooks")
