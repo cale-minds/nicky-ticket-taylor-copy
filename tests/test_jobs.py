@@ -2,6 +2,7 @@ import pytest
 
 from app.config import Settings
 from app.job_runner import is_authorized_job_request, run_expire_overdue_orders
+from app.main import emit_job_log
 
 
 def test_job_runner_requires_matching_bearer_token() -> None:
@@ -37,3 +38,12 @@ async def test_expire_overdue_orders_runner_uses_runtime_settings(tmp_path) -> N
 
     assert result["status"] == "disabled"
     assert result["expired_count"] == 0
+
+
+def test_emit_job_log_writes_searchable_stdout(capsys) -> None:
+    emit_job_log("completed", {"status": "processed", "selected_count": 1})
+
+    output = capsys.readouterr().out
+
+    assert "JOB expire_overdue_orders.completed" in output
+    assert '"selected_count": 1' in output

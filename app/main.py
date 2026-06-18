@@ -56,7 +56,7 @@ async def expire_overdue_orders_loop() -> None:
         await asyncio.sleep(interval)
         try:
             result = await service.expire_overdue_orders()
-            logger.info("expire_overdue_orders.background %s", job_log_payload(result))
+            emit_job_log("background_completed", job_log_payload(result))
         except Exception:
             # Keep the webhook service alive even if one expiration pass fails.
             logger.exception("expire_overdue_orders.background_failed")
@@ -151,6 +151,13 @@ def job_log_payload(result: dict[str, Any], **extra: Any) -> str:
         **extra,
     }
     return json.dumps(payload, sort_keys=True, default=str)
+
+
+def emit_job_log(event: str, payload: dict[str, Any] | str) -> None:
+    text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    message = f"JOB expire_overdue_orders.{event} {text}"
+    print(message, flush=True)
+    logger.info(message)
 
 
 def require_admin(
@@ -762,11 +769,21 @@ async def admin_expire_overdue_orders(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not admin_auth.is_privileged(user, settings):
         normalized_tenant_id = scoped_tenant_id(user, normalized_tenant_id)
-    return await service.expire_overdue_orders(
+    emit_job_log(
+        "admin_started",
+        {
+            "tenant_id": normalized_tenant_id,
+            "expiration_hours": expiration_hours,
+            "batch_size": batch_size,
+        },
+    )
+    result = await service.expire_overdue_orders(
         tenant_id=normalized_tenant_id,
         expiration_hours=expiration_hours,
         batch_size=batch_size,
     )
+    emit_job_log("admin_completed", job_log_payload(result, tenant_id=normalized_tenant_id))
+    return result
 
 
 @app.api_route("/jobs/expire-overdue-orders", methods=["GET", "POST"])
@@ -776,16 +793,13 @@ async def job_expire_overdue_orders(
     expiration_hours: float | None = Query(default=None),
     batch_size: int | None = Query(default=None),
 ) -> dict[str, Any]:
-    logger.info(
-        "expire_overdue_orders.job_started %s",
-        json.dumps(
-            {
-                "tenant_id": tenant_id,
-                "expiration_hours": expiration_hours,
-                "batch_size": batch_size,
-            },
-            sort_keys=True,
-        ),
+    emit_job_log(
+        "started",
+        {
+            "tenant_id": tenant_id,
+            "expiration_hours": expiration_hours,
+            "batch_size": batch_size,
+        },
     )
     try:
         normalized_tenant_id = normalize_tenant_id(tenant_id) if tenant_id else None
@@ -799,10 +813,7 @@ async def job_expire_overdue_orders(
         expiration_hours=expiration_hours,
         batch_size=batch_size,
     )
-    logger.info(
-        "expire_overdue_orders.job_completed %s",
-        job_log_payload(result, tenant_id=normalized_tenant_id),
-    )
+    emit_job_log("completed", job_log_payload(result, tenant_id=normalized_tenant_id))
     return result
 
 
