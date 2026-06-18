@@ -1301,8 +1301,42 @@ def tenant_options(
 ) -> str:
     options = option_tag("", "All tenants", selected or "") if include_all else ""
     for tenant in tenants:
-        options += option_tag(tenant.tenant_id, tenant.tenant_id, selected or "")
+        options += option_tag(tenant.tenant_id, tenant_option_label(tenant), selected or "")
     return options
+
+
+def tenant_option_label(tenant: TenantConfig) -> str:
+    label = tenant.name.strip() if tenant.name else ""
+    short_id = compact_identifier(tenant.tenant_id)
+    if label and label != tenant.tenant_id:
+        return f"{label} · {short_id}"
+    return short_id
+
+
+def compact_identifier(value: str, *, prefix: int = 8, suffix: int = 6) -> str:
+    if len(value) <= prefix + suffix + 3:
+        return value
+    return f"{value[:prefix]}...{value[-suffix:]}"
+
+
+def tenant_filter_field(
+    *,
+    name: str,
+    tenants: list[TenantConfig],
+    selected: str,
+    include_all: bool,
+) -> str:
+    if not include_all and len(tenants) == 1:
+        tenant = tenants[0]
+        return f"""
+        <label class="min-w-0 text-sm font-semibold text-slate-950">Tenant
+          <input type="hidden" name="{e(name)}" value="{e(tenant.tenant_id)}">
+          <div class="mt-2 flex h-11 min-w-0 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 shadow-sm" title="{e(tenant.tenant_id)}">
+            <span class="min-w-0 truncate font-semibold">{e(tenant_option_label(tenant))}</span>
+          </div>
+        </label>
+        """
+    return f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="{e(name)}">{tenant_options(tenants, selected, include_all=include_all)}</select></label>'
 
 
 def tenant_page_filters(request: Request) -> dict[str, str | None]:
@@ -1422,7 +1456,12 @@ def order_filters_form(
     selected_tenant = str(order_filters.get("tenant_id") or "")
     tenant_field = ""
     if show_tenant_filter:
-        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="orders_tenant_id">{tenant_options(tenants, selected_tenant, include_all=allow_all_tenants)}</select></label>'
+        tenant_field = tenant_filter_field(
+            name="orders_tenant_id",
+            tenants=tenants,
+            selected=selected_tenant,
+            include_all=allow_all_tenants,
+        )
     return f"""
     <div class="border-b border-slate-100 p-4">
       <form method="get" action="{e(action)}" class="grid min-w-0 grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(200px,1.1fr)_auto]">
@@ -1463,7 +1502,12 @@ def webhook_filters_form(
     selected_tenant = str(webhook_filters.get("tenant_id") or "")
     tenant_field = ""
     if show_tenant_filter:
-        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="webhooks_tenant_id">{tenant_options(tenants, selected_tenant, include_all=allow_all_tenants)}</select></label>'
+        tenant_field = tenant_filter_field(
+            name="webhooks_tenant_id",
+            tenants=tenants,
+            selected=selected_tenant,
+            include_all=allow_all_tenants,
+        )
     return f"""
     <div class="border-b border-slate-100 p-4">
       <form method="get" action="{e(action)}" class="grid min-w-0 grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(200px,1.1fr)_auto]">
@@ -1500,7 +1544,12 @@ def orders_page_filters_form(
     )
     tenant_field = ""
     if show_tenant_filter:
-        tenant_field = f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="tenant_id">{tenant_options(tenants, str(order_filters.get("tenant_id") or ""), include_all=allow_all_tenants)}</select></label>'
+        tenant_field = tenant_filter_field(
+            name="tenant_id",
+            tenants=tenants,
+            selected=str(order_filters.get("tenant_id") or ""),
+            include_all=allow_all_tenants,
+        )
     return f"""
     <div class="border-b border-slate-100 p-4">
       <form method="get" action="/admin-ui/orders" class="grid min-w-0 grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(200px,1.1fr)_auto]">
