@@ -35,6 +35,13 @@ def _float_env(name: str, default: float) -> float:
     return float(raw)
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _csv_env(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name)
     if raw is None:
@@ -65,6 +72,8 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     database_path: Path = Path(os.getenv("DATABASE_PATH", "./data/integration.sqlite3"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    run_background_jobs: bool = _bool_env("RUN_BACKGROUND_JOBS", False)
+    job_runner_token: str = os.getenv("JOB_RUNNER_TOKEN", "")
 
     ticket_tailor_api_key: str = os.getenv("TICKET_TAILOR_API_KEY", "")
     ticket_tailor_webhook_signing_secret: str = ""

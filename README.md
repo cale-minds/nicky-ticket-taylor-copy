@@ -64,6 +64,8 @@ API_BASE_PATH=/api
 ADMIN_API_BASE_PATH=/api
 DATABASE_URL=
 DATABASE_PATH=./data/integration.sqlite3
+RUN_BACKGROUND_JOBS=false
+JOB_RUNNER_TOKEN=
 ADMIN_SESSION_SECRET=change-this-in-production
 ADMIN_SESSION_MAX_AGE_SECONDS=28800
 AUTH0_DOMAIN=
@@ -96,6 +98,10 @@ DATABASE_URL=mssql+pyodbc://user:password@host:1433/database_name?driver=ODBC+Dr
 The application runs Alembic migrations automatically during startup.
 MySQL uses the bundled `PyMySQL` driver. SQL Server requires the `mssql` extra plus an
 ODBC driver available in the runtime image.
+
+Use `RUN_BACKGROUND_JOBS=true` only on a persistent process where the FastAPI app stays
+alive. On serverless hosts, keep it `false` and call the job endpoint or CLI from a
+scheduler. `JOB_RUNNER_TOKEN` protects `/api/jobs/...` endpoints used by schedulers.
 
 The Nicky Short ID is saved from the validated Nicky API key and is used to build the hosted payment URL:
 
@@ -447,7 +453,7 @@ Any status other than `Finished` does not confirm the Ticket Tailor order. If th
 POST /v1/issued_tickets/:issued_ticket_id/void
 ```
 
-Pending orders can also expire automatically based on `TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS`.
+Pending orders can also expire when the job runner executes, based on `TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS`.
 
 ## End-To-End Setup Checklist
 
@@ -474,9 +480,41 @@ Pending orders can also be expired automatically. Set:
 TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS=4
 TICKET_TAILOR_EXPIRATION_CHECK_INTERVAL_SECONDS=300
 TICKET_TAILOR_EXPIRATION_BATCH_SIZE=100
+JOB_RUNNER_TOKEN=change-this-token
+RUN_BACKGROUND_JOBS=false
 ```
 
-`TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS=0` disables automatic expiration. Each expiration pass selects at most `TICKET_TAILOR_EXPIRATION_BATCH_SIZE` orders, ordered by creation time. Failures are isolated per order: one failed void operation is returned/logged as a failed item and does not stop the rest of the batch.
+`TICKET_TAILOR_PENDING_TICKET_EXPIRATION_HOURS=0` disables expiration. Each expiration pass selects at most `TICKET_TAILOR_EXPIRATION_BATCH_SIZE` orders, ordered by creation time. Failures are isolated per order: one failed void operation is returned/logged as a failed item and does not stop the rest of the batch.
+
+The expiration runner is portable and is not tied to one host:
+
+- Serverless hosts such as Vercel: keep `RUN_BACKGROUND_JOBS=false` and call the job endpoint from an external scheduler.
+- Persistent servers, Docker, or a VM: set `RUN_BACKGROUND_JOBS=true` if you want the FastAPI process to run the loop internally.
+- GitHub Actions or another scheduler: call the HTTP job endpoint, or run the CLI if the runner has direct access to the application environment.
+
+HTTP job endpoint:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $env:JOB_RUNNER_TOKEN" } `
+  "https://your-domain.example/api/jobs/expire-overdue-orders"
+```
+
+CLI runner:
+
+```bash
+python -m app.jobs expire-overdue-orders
+```
+
+Optional filters are available in both modes:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $env:JOB_RUNNER_TOKEN" } `
+  "https://your-domain.example/api/jobs/expire-overdue-orders?tenant_id={tenant_uuid}&expiration_hours=4&batch_size=25"
+```
 
 You can trigger the same sweep manually with:
 

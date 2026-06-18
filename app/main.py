@@ -18,6 +18,7 @@ from app import admin_auth
 from app.admin_ui import create_admin_ui_router
 from app.config import Settings, external_api_url, get_settings
 from app.db import Database
+from app.job_runner import is_authorized_job_request, run_expire_overdue_orders
 from app.nicky import NickyApiError, NickyClient
 from app.security import SignatureError, verify_ticket_tailor_signature
 from app.service import IntegrationService, row_to_dict
@@ -76,7 +77,10 @@ class TicketTailorApiKeyValidationRequest(BaseModel):
 async def lifespan(_: FastAPI):
     db.init()
     expiration_task: asyncio.Task[None] | None = None
-    if settings.ticket_tailor_pending_ticket_expiration_hours > 0:
+    if (
+        settings.run_background_jobs
+        and settings.ticket_tailor_pending_ticket_expiration_hours > 0
+    ):
         expiration_task = asyncio.create_task(expire_overdue_orders_loop())
     try:
         yield
@@ -147,6 +151,19 @@ def require_admin(
 def require_admin_role(user: admin_auth.AdminUser) -> None:
     if not admin_auth.is_admin(user, settings):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+
+
+def require_job_runner(authorization: str | None = Header(default=None)) -> None:
+    if not settings.job_runner_token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Job runner token is not configured",
+        )
+    if not is_authorized_job_request(settings, authorization):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Job runner authentication required",
+        )
 
 
 def require_writer(user: admin_auth.AdminUser) -> None:
@@ -398,6 +415,8 @@ async def health() -> dict[str, Any]:
         "ticket_tailor_expiration_batch_size": (
             settings.ticket_tailor_expiration_batch_size
         ),
+        "run_background_jobs": settings.run_background_jobs,
+        "job_runner_token_configured": bool(settings.job_runner_token),
         "nicky_configured_tenant_count": sum(tenant.nicky_configured for tenant in tenants),
         "ticket_tailor_configured_tenant_count": sum(
             tenant.ticket_tailor_configured for tenant in tenants
@@ -724,6 +743,27 @@ async def admin_expire_overdue_orders(
     if not admin_auth.is_privileged(user, settings):
         normalized_tenant_id = scoped_tenant_id(user, normalized_tenant_id)
     return await service.expire_overdue_orders(
+        tenant_id=normalized_tenant_id,
+        expiration_hours=expiration_hours,
+        batch_size=batch_size,
+    )
+
+
+@app.post("/jobs/expire-overdue-orders")
+async def job_expire_overdue_orders(
+    _: None = Depends(require_job_runner),
+    tenant_id: str | None = Query(default=None),
+    expiration_hours: float | None = Query(default=None),
+    batch_size: int | None = Query(default=None),
+) -> dict[str, Any]:
+    try:
+        normalized_tenant_id = normalize_tenant_id(tenant_id) if tenant_id else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await run_expire_overdue_orders(
+        settings=settings,
+        db=db,
+        service=service,
         tenant_id=normalized_tenant_id,
         expiration_hours=expiration_hours,
         batch_size=batch_size,
