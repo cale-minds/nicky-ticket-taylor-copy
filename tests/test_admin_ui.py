@@ -167,6 +167,19 @@ def authenticate_common_user_without_nicky_claim(client: TestClient) -> None:
     )
 
 
+def authenticate_support(client: TestClient) -> None:
+    client.cookies.set(
+        "session",
+        sign_admin_session(
+            subject="auth0|support",
+            name="Support User",
+            email="support@example.com",
+            roles=["Support"],
+            claims={"sub": "auth0|support", "roles": ["Support"]},
+        ),
+    )
+
+
 def seed_tenant(
     client: TestClient,
     tenant_id: str,
@@ -185,6 +198,42 @@ def seed_tenant(
         owner_auth_subject=owner_auth_subject,
     )
     client.app.state.db.upsert_tenant(tenant)
+
+
+def seed_dashboard_order(client: TestClient, tenant_id: str, order_id: str) -> None:
+    client.app.state.db.upsert_order(
+        tenant_id,
+        {
+            "ticket_tailor_order_id": order_id,
+            "event_id": f"event-{order_id}",
+            "status": "pending",
+            "payment_status": "pending",
+            "currency": "USD",
+            "amount_minor": 100,
+            "buyer_email": f"{order_id}@example.com",
+            "buyer_name": f"Buyer {order_id}",
+        },
+        {
+            "id": order_id,
+            "issued_tickets": [],
+        },
+    )
+
+
+def seed_dashboard_webhook(client: TestClient, tenant_id: str, event_id: str) -> None:
+    client.app.state.db.insert_webhook_event(
+        tenant_id=tenant_id,
+        source="ticket_tailor",
+        event_id=event_id,
+        event_type=f"{event_id.upper()}.CREATED",
+        raw_body=json.dumps({"id": event_id}).encode("utf-8"),
+    )
+    client.app.state.db.mark_webhook_event(
+        tenant_id,
+        "ticket_tailor",
+        event_id,
+        "processed",
+    )
 
 
 def test_admin_ui_requires_auth0_configuration(tmp_path) -> None:
@@ -294,6 +343,102 @@ def test_wildcard_allowed_roles_keeps_common_user_in_scoped_view(tmp_path) -> No
     assert ">Admin<" not in response.text
     assert 'href="/admin-ui/tenants/new"' in response.text
     assert "All tenants" not in response.text
+
+
+def test_admin_can_filter_dashboard_recent_orders_and_webhooks_by_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path)
+    seed_tenant(client, "tenant-alpha")
+    seed_tenant(client, "tenant-beta")
+    seed_dashboard_order(client, "tenant-alpha", "order-alpha")
+    seed_dashboard_order(client, "tenant-beta", "order-beta")
+    seed_dashboard_webhook(client, "tenant-alpha", "webhook-alpha")
+    seed_dashboard_webhook(client, "tenant-beta", "webhook-beta")
+    authenticate_admin(client)
+
+    response = client.get(
+        "/overview?orders_tenant_id=tenant-alpha&webhooks_tenant_id=tenant-beta"
+    )
+    html = response.text
+
+    assert response.status_code == 200
+    assert 'name="orders_tenant_id"' in html
+    assert 'name="webhooks_tenant_id"' in html
+    assert '<option value="tenant-alpha" selected>tenant-alpha</option>' in html
+    assert '<option value="tenant-beta" selected>tenant-beta</option>' in html
+    assert "order-alpha" in html
+    assert "order-beta" not in html
+    assert "WEBHOOK-BETA.CREATED" in html
+    assert "WEBHOOK-ALPHA.CREATED" not in html
+
+
+def test_support_can_filter_dashboard_recent_orders_and_webhooks_by_tenant(tmp_path) -> None:
+    client = build_test_client(tmp_path)
+    seed_tenant(client, "tenant-alpha")
+    seed_tenant(client, "tenant-beta")
+    seed_dashboard_order(client, "tenant-alpha", "support-order-alpha")
+    seed_dashboard_order(client, "tenant-beta", "support-order-beta")
+    seed_dashboard_webhook(client, "tenant-alpha", "support-webhook-alpha")
+    seed_dashboard_webhook(client, "tenant-beta", "support-webhook-beta")
+    authenticate_support(client)
+
+    response = client.get(
+        "/overview?orders_tenant_id=tenant-beta&webhooks_tenant_id=tenant-alpha"
+    )
+    html = response.text
+
+    assert response.status_code == 200
+    assert 'name="orders_tenant_id"' in html
+    assert 'name="webhooks_tenant_id"' in html
+    assert "support-order-beta" in html
+    assert "support-order-alpha" not in html
+    assert "SUPPORT-WEBHOOK-ALPHA.CREATED" in html
+    assert "SUPPORT-WEBHOOK-BETA.CREATED" not in html
+
+
+def test_common_user_can_filter_dashboard_only_by_created_tenants(tmp_path) -> None:
+    client = build_test_client(tmp_path, admin_allowed_roles=["Admin"])
+    seed_tenant(client, "owned-alpha", owner_auth_subject="auth0|common")
+    seed_tenant(client, "owned-beta", owner_auth_subject="auth0|common")
+    seed_tenant(client, "other-tenant", owner_auth_subject="auth0|other")
+    seed_dashboard_order(client, "owned-alpha", "owned-order-alpha")
+    seed_dashboard_order(client, "owned-beta", "owned-order-beta")
+    seed_dashboard_order(client, "other-tenant", "other-order")
+    seed_dashboard_webhook(client, "owned-alpha", "owned-webhook-alpha")
+    seed_dashboard_webhook(client, "owned-beta", "owned-webhook-beta")
+    seed_dashboard_webhook(client, "other-tenant", "other-webhook")
+    authenticate_common_user_without_nicky_claim(client)
+
+    allowed_response = client.get(
+        "/overview?orders_tenant_id=owned-beta&webhooks_tenant_id=owned-alpha"
+    )
+    allowed_html = allowed_response.text
+
+    assert allowed_response.status_code == 200
+    assert 'name="orders_tenant_id"' in allowed_html
+    assert 'name="webhooks_tenant_id"' in allowed_html
+    assert '<option value="owned-alpha" selected>owned-alpha</option>' in allowed_html
+    assert '<option value="owned-beta" selected>owned-beta</option>' in allowed_html
+    assert 'value="other-tenant"' not in allowed_html
+    assert "owned-order-beta" in allowed_html
+    assert "owned-order-alpha" not in allowed_html
+    assert "other-order" not in allowed_html
+    assert "OWNED-WEBHOOK-ALPHA.CREATED" in allowed_html
+    assert "OWNED-WEBHOOK-BETA.CREATED" not in allowed_html
+    assert "OTHER-WEBHOOK.CREATED" not in allowed_html
+
+    blocked_response = client.get(
+        "/overview?orders_tenant_id=other-tenant&webhooks_tenant_id=other-tenant"
+    )
+    blocked_html = blocked_response.text
+
+    assert blocked_response.status_code == 200
+    assert "other-order" not in blocked_html
+    assert "OTHER-WEBHOOK.CREATED" not in blocked_html
+    assert "owned-order-alpha" in blocked_html or "owned-order-beta" in blocked_html
+    assert (
+        "OWNED-WEBHOOK-ALPHA.CREATED" in blocked_html
+        or "OWNED-WEBHOOK-BETA.CREATED" in blocked_html
+    )
 
 
 def test_new_tenant_form_keeps_derived_fields_out_of_identity(tmp_path) -> None:

@@ -37,6 +37,8 @@ class TenantScope:
     tenant_filters: dict[str, str]
     order_tenant_id: str | None
     scoped: bool
+    # None = privileged user (no restriction); frozenset = allowed tenant IDs for regular user
+    allowed_tenant_ids: frozenset[str] | None = None
 
 
 def create_admin_ui_router(
@@ -131,12 +133,8 @@ def create_admin_ui_router(
     ):
         tenant_scope = scoped_tenant_scope(user, settings, db)
         tenants = db.list_tenants(**tenant_scope.tenant_filters)
-        order_filters = scoped_order_filters(
-            dashboard_order_filters(request), tenant_scope.order_tenant_id
-        )
-        webhook_filters = scoped_webhook_filters(
-            dashboard_webhook_filters(request), tenant_scope.order_tenant_id
-        )
+        order_filters = scoped_order_filters(dashboard_order_filters(request), tenant_scope)
+        webhook_filters = scoped_webhook_filters(dashboard_webhook_filters(request), tenant_scope)
         tenants_page_number = page_query_value(request.query_params.get("tenants_page"))
         orders_page_number = page_query_value(request.query_params.get("orders_page"))
         webhooks_page_number = page_query_value(request.query_params.get("webhooks_page"))
@@ -183,7 +181,7 @@ def create_admin_ui_router(
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">Recent webhooks</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-            {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=not tenant_scope.scoped)}
+            {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope))}
             {webhook_table(webhooks)}
             {pagination_controls(webhooks_page_number, DASHBOARD_PAGE_SIZE, webhooks_total, "/overview", request.query_params, "webhooks_page")}
           </div>
@@ -191,7 +189,7 @@ def create_admin_ui_router(
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">Recent orders</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-            {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=not tenant_scope.scoped)}
+            {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope))}
             {orders_table(orders)}
             {pagination_controls(orders_page_number, DASHBOARD_PAGE_SIZE, orders_total, "/overview", request.query_params, "orders_page")}
           </div>
@@ -417,9 +415,7 @@ def create_admin_ui_router(
     ):
         tenant_scope = scoped_tenant_scope(user, settings, db)
         tenants = db.list_tenants(**tenant_scope.tenant_filters)
-        order_filters = scoped_order_filters(
-            orders_page_filters(request), tenant_scope.order_tenant_id
-        )
+        order_filters = scoped_order_filters(orders_page_filters(request), tenant_scope)
         page_number = page_query_value(request.query_params.get("page"))
         total = db.count_orders(**order_filters)
         orders = [
@@ -438,7 +434,7 @@ def create_admin_ui_router(
           </div>
         </section>
         <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
-          {orders_page_filters_form(order_filters, tenants, show_tenant_filter=not tenant_scope.scoped)}
+          {orders_page_filters_form(order_filters, tenants, show_tenant_filter=scope_shows_tenant_filter(tenant_scope))}
           {orders_table(orders)}
           {pagination_controls(page_number, DEFAULT_PAGE_SIZE, total, "/admin-ui/orders", request.query_params, "page")}
         </div>
@@ -454,8 +450,10 @@ def create_admin_ui_router(
     ):
         tenant = normalize_tenant_id(tenant_id)
         tenant_scope = scoped_tenant_scope(user, settings, db)
-        if tenant_scope.scoped and tenant != tenant_scope.order_tenant_id:
-            raise HTTPException(status_code=403, detail="Order outside user scope")
+        if tenant_scope.scoped:
+            allowed = tenant_scope.allowed_tenant_ids or frozenset()
+            if tenant not in allowed:
+                raise HTTPException(status_code=403, detail="Order outside user scope")
         row = db.get_order(tenant, ticket_tailor_order_id)
         if not row:
             raise HTTPException(status_code=404, detail="Order not found")
@@ -642,21 +640,36 @@ def scoped_tenant_scope(
     user: admin_auth.AdminUser, settings: Settings, db: Database
 ) -> TenantScope:
     if admin_auth.is_privileged(user, settings):
-        return TenantScope(tenant_filters={}, order_tenant_id=None, scoped=False)
+        return TenantScope(
+            tenant_filters={}, order_tenant_id=None, scoped=False, allowed_tenant_ids=None
+        )
     owner_uuid = admin_auth.nicky_user_uuid_claim(user)
     if owner_uuid:
         return TenantScope(
             tenant_filters={"nicky_user_uuid": owner_uuid},
             order_tenant_id=owner_uuid,
             scoped=True,
+            allowed_tenant_ids=frozenset([owner_uuid]),
         )
-    tenants = db.list_tenants(owner_auth_subject=user.subject, limit=1)
-    order_tenant_id = tenants[0].tenant_id if tenants else NO_TENANT_SCOPE
+    # Fetch ALL tenants owned by this user (not just the first one) so multi-tenant
+    # users can filter by any of their tenants.
+    user_tenants = db.list_tenants(owner_auth_subject=user.subject)
+    allowed = frozenset(t.tenant_id for t in user_tenants)
+    first_tenant_id = user_tenants[0].tenant_id if user_tenants else NO_TENANT_SCOPE
     return TenantScope(
         tenant_filters={"owner_auth_subject": user.subject},
-        order_tenant_id=order_tenant_id,
+        order_tenant_id=first_tenant_id,
         scoped=True,
+        allowed_tenant_ids=allowed,
     )
+
+
+def scope_shows_tenant_filter(scope: TenantScope) -> bool:
+    """Return True when the tenant dropdown should be shown in filter forms."""
+    if not scope.scoped:
+        return True  # admin / support: show all tenants
+    # Regular users: only show the filter when they own more than one tenant
+    return bool(scope.allowed_tenant_ids and len(scope.allowed_tenant_ids) > 1)
 
 
 def can_write_tenants(user: admin_auth.AdminUser, settings: Settings) -> bool:
@@ -710,20 +723,33 @@ def ensure_unique_active_api_keys(
 
 
 def scoped_order_filters(
-    filters: dict[str, str | None], owner_uuid: str | None
+    filters: dict[str, str | None], scope: TenantScope
 ) -> dict[str, str | None]:
-    if owner_uuid:
-        filters = dict(filters)
-        filters["tenant_id"] = owner_uuid
+    if scope.allowed_tenant_ids is None:
+        # Privileged user — no tenant restriction.
+        return filters
+    filters = dict(filters)
+    requested = filters.get("tenant_id")
+    if requested and requested in scope.allowed_tenant_ids:
+        # User explicitly selected one of their own tenants — allow it.
+        filters["tenant_id"] = requested
+    else:
+        # Default to the first/only tenant in their scope.
+        filters["tenant_id"] = scope.order_tenant_id
     return filters
 
 
 def scoped_webhook_filters(
-    filters: dict[str, str | None], owner_uuid: str | None
+    filters: dict[str, str | None], scope: TenantScope
 ) -> dict[str, str | None]:
-    if owner_uuid:
-        filters = dict(filters)
-        filters["tenant_id"] = owner_uuid
+    if scope.allowed_tenant_ids is None:
+        return filters
+    filters = dict(filters)
+    requested = filters.get("tenant_id")
+    if requested and requested in scope.allowed_tenant_ids:
+        filters["tenant_id"] = requested
+    else:
+        filters["tenant_id"] = scope.order_tenant_id
     return filters
 
 
