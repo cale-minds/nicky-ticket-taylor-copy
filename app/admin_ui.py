@@ -644,12 +644,12 @@ def page(
         email = e(user.email or "")
         user_block = f"""
         <div class="flex items-center gap-3 text-sm">
-          {easter_egg}
           {lang_switcher(current_path)}
           <div class="relative" id="user-menu-wrapper">
             <button type="button" onclick="document.getElementById('user-menu').classList.toggle('hidden')"
               class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50">
               <span class="flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">{initials}</span>
+              {easter_egg}
               <i class="ph ph-caret-down text-xs text-slate-400"></i>
             </button>
             <div id="user-menu" class="absolute right-0 z-50 mt-1 hidden min-w-[220px] rounded-xl border border-slate-100 bg-white py-1 shadow-nicky">
