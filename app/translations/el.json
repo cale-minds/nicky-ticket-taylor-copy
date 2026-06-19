@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "Σύνολο παραγγελιών",
     "METRIC_TOTAL_WEBHOOKS": "Σύνολο WebHook",
     "METRIC_ACTIVE": "{{count}} ενεργά",
-    "METRIC_ALL_TIME": "όλων των εποχών"
+    "METRIC_ALL_TIME": "όλων των εποχών",
+    "NO_TENANTS_CTA_TITLE": "Δεν έχουν ρυθμιστεί Tenants",
+    "NO_TENANTS_CTA_HINT": "Συνδέστε έναν λογαριασμό Ticket Tailor για να ξεκινήσετε.",
+    "NO_TENANTS_CTA_BUTTON": "Προσθήκη πρώτου Tenant"
   },
   "TENANTS": {
     "TITLE": "Συνδέσεις πελατών",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "Νέος Tenant",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "Λήψη API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Όνομα",

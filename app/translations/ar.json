@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "إجمالي الطلبات",
     "METRIC_TOTAL_WEBHOOKS": "إجمالي WebHooks",
     "METRIC_ACTIVE": "{{count}} نشط",
-    "METRIC_ALL_TIME": "منذ البداية"
+    "METRIC_ALL_TIME": "منذ البداية",
+    "NO_TENANTS_CTA_TITLE": "لا توجد Tenants مُهيَّأة",
+    "NO_TENANTS_CTA_HINT": "قم بتوصيل حساب Ticket Tailor للبدء.",
+    "NO_TENANTS_CTA_BUTTON": "إضافة أول Tenant"
   },
   "TENANTS": {
     "TITLE": "اتصالات العملاء",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "Tenant جديد",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "الحصول على API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "الاسم",

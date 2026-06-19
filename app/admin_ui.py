@@ -208,6 +208,7 @@ def create_admin_ui_router(
           {new_tenant_link(user, tenants, settings)}
         </section>
         {summary_grid(tenants, orders_total, webhooks_total)}
+        {no_tenants_cta(user, tenants, settings)}
         <section class="mb-7 min-w-0">
           <h2 class="mb-3 text-lg font-semibold text-slate-950">{t("DASHBOARD.CUSTOMER_CONNECTIONS")}</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
@@ -220,7 +221,7 @@ def create_admin_ui_router(
           <h2 class="mb-3 text-lg font-semibold text-slate-950">{t("DASHBOARD.RECENT_WEBHOOKS")}</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {webhook_filters_form(webhook_filters, order_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
-            {webhook_table(webhooks)}
+            {webhook_table(webhooks, tenant_names={tn.tenant_id: tn.name for tn in tenants})}
             {pagination_controls(webhooks_page_number, webhooks_page_size, webhooks_total, "/overview", request.query_params, "webhooks_page", size_param="webhooks_per_page", size_options=PAGE_SIZE_OPTIONS)}
           </div>
         </section>
@@ -228,7 +229,7 @@ def create_admin_ui_router(
           <h2 class="mb-3 text-lg font-semibold text-slate-950">{t("DASHBOARD.RECENT_ORDERS")}</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
-            {orders_table(orders)}
+            {orders_table(orders, tenant_names={tn.tenant_id: tn.name for tn in tenants})}
             {pagination_controls(orders_page_number, orders_page_size, orders_total, "/overview", request.query_params, "orders_page", size_param="orders_per_page", size_options=PAGE_SIZE_OPTIONS)}
           </div>
         </section>
@@ -504,7 +505,7 @@ def create_admin_ui_router(
         </section>
         <div id="orders-card" class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
           {orders_page_filters_form(order_filters, tenants, show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
-          {orders_table(orders)}
+          {orders_table(orders, tenant_names={t.tenant_id: t.name for t in tenants})}
           {pagination_controls(page_number, page_size, total, "/admin-ui/orders", request.query_params, "page", size_param="per_page", size_options=PAGE_SIZE_OPTIONS)}
         </div>
         """
@@ -1159,6 +1160,24 @@ def new_tenant_link(user: admin_auth.AdminUser, tenants: list[TenantConfig], set
     return f'<a class="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/tenants/new"><i class="ph ph-plus text-sm"></i>{t("TENANTS.BUTTON_NEW")}</a>'
 
 
+def no_tenants_cta(user: admin_auth.AdminUser, tenants: list[TenantConfig], settings: Settings) -> str:
+    if tenants or not can_write_tenants(user, settings):
+        return ""
+    return f"""
+    <div class="mb-7 overflow-hidden rounded-xl border border-dashed border-slate-200 bg-white px-6 py-10 text-center shadow-nicky">
+      <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+        <i class="ph ph-plug text-2xl text-slate-400"></i>
+      </div>
+      <h3 class="text-base font-semibold text-slate-900">{t("DASHBOARD.NO_TENANTS_CTA_TITLE")}</h3>
+      <p class="mt-1 text-sm text-slate-500">{t("DASHBOARD.NO_TENANTS_CTA_HINT")}</p>
+      <a href="/admin-ui/tenants/new" class="mt-5 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800">
+        <i class="ph ph-plus text-sm"></i>
+        {t("DASHBOARD.NO_TENANTS_CTA_BUTTON")}
+      </a>
+    </div>
+    """
+
+
 def summary_grid(
     tenants: list[TenantConfig], orders_total: int, webhooks_total: int
 ) -> str:
@@ -1229,7 +1248,7 @@ def tenant_row(tenant: TenantConfig, *, user: admin_auth.AdminUser, settings: Se
         actions = f'<a class="inline-flex h-9 items-center gap-2 rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/tenants/{u(tenant.tenant_id)}/edit"><i class="ph ph-pencil text-sm"></i>{t("COMMON.EDIT")}</a>'
     return f"""
     <tr class="bg-white transition-colors duration-150 even:bg-[#f8f8f9] hover:bg-gray-50/80">
-      <td class="border-b border-slate-100 px-4 py-3 align-top"><strong class="font-semibold text-slate-950">{e(tenant.tenant_id)}</strong><br><small class="text-sm text-slate-400">{e(tenant.name)}</small></td>
+      <td class="border-b border-slate-100 px-4 py-3 align-top"><strong class="font-semibold text-slate-950">{e(tenant.name or tenant.tenant_id)}</strong><br><small class="text-sm text-slate-400">{e(compact_identifier(tenant.tenant_id))}</small></td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{e(tenant.nicky_user_email or "-")}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{badge(t("COMMON.ACTIVE") if tenant.active else t("COMMON.INACTIVE"), tenant.active)}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{badge(t("COMMON.CONFIGURED") if safe["ticket_tailor_configured"] else t("COMMON.MISSING"), safe["ticket_tailor_configured"])}</td>
@@ -1314,67 +1333,99 @@ def tenant_form(
     save_label = t("TENANTS.FORM_BUTTON_CREATE") if is_new else t("TENANTS.FORM_BUTTON_SAVE")
     page_title = t("TENANTS.FORM_TITLE_NEW") if is_new else f"{t('TENANTS.FORM_TITLE_EDIT')} {e(tenant.name or tenant.tenant_id)}"
     return f"""
-    <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold leading-8 text-slate-950">{page_title}</h1>
-      </div>
-      <div class="flex flex-wrap gap-3">
-        {delete_action}
-        <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{t("TENANTS.FORM_BUTTON_BACK")}</a>
-        <button id="save-tenant-button" class="inline-flex h-10 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" form="tenant-form" disabled>{save_label}</button>
-      </div>
+    <section class="mb-6">
+      <h1 class="text-2xl font-semibold leading-8 text-slate-950">{page_title}</h1>
     </section>
     {notice}
-    <form id="tenant-form" method="post" action="/admin-ui/tenants/save" class="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-5">
+    <form id="tenant-form" method="post" action="/admin-ui/tenants/save" autocomplete="off" class="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-4">
       {hidden_tenant_id}
-      <section class="min-w-0 rounded-lg border border-slate-100 bg-white p-5 shadow-nicky">
-        <div class="min-w-0">
-          <h2 class="mb-5 text-lg font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_TENANT")}</h2>
-          <div class="space-y-5">
-            {text_input(t("TENANTS.FORM_LABEL_NAME"), "name", value=tenant.name if not is_new else "")}
-            {tenant_uuid_block}
+
+      <!-- Tenant section -->
+      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky lg:grid-cols-3">
+        <div>
+          <h2 class="text-base font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_TENANT")}</h2>
+        </div>
+        <div class="lg:col-span-2 space-y-5">
+          {text_input(t("TENANTS.FORM_LABEL_NAME"), "name", value=tenant.name if not is_new else "")}
+          {tenant_uuid_block}
+        </div>
+      </div>
+
+      <!-- Nicky section -->
+      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky lg:grid-cols-3">
+        <div>
+          <h2 class="text-base font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_NICKY")}</h2>
+          <div class="mt-3">
+            <a href="{e(settings.nicky_pay_base_url)}/settings/api-key-management" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900">
+              <i class="ph ph-key text-sm"></i>{t("TENANTS.FORM_GET_API_KEY")}<i class="ph ph-arrow-square-out text-xs"></i>
+            </a>
           </div>
         </div>
-        <div class="mt-6 min-w-0 border-t border-slate-100 pt-6">
-          <h2 class="mb-5 text-lg font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_NICKY")}</h2>
-          <label class="mb-4 block min-w-0 text-sm font-semibold text-slate-950">
-            {t("TENANTS.FORM_LABEL_API_KEY")}
+        <div class="lg:col-span-2 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-slate-950">
+              {t("TENANTS.FORM_LABEL_API_KEY")}
+            </label>
             <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
               <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
-                <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none disabled:bg-slate-50" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="off">
+                <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="new-password">
                 <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="Show Nicky API key" title="Show API key">{t("COMMON.SHOW")}</button>
               </div>
               <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
             </div>
-          </label>
-          <p id="nicky-validation-status" class="mb-5 min-h-5 text-sm text-slate-500"></p>
-          <div class="mb-5 min-w-0">
-            <label class="block min-w-0 text-sm font-semibold text-slate-950">
+            <p id="nicky-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-slate-950">
               {t("TENANTS.FORM_LABEL_NICKY_EMAIL")}
-              <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}"{nicky_identity_readonly}>
+              <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}" autocomplete="off"{nicky_identity_readonly}>
             </label>
           </div>
-          <label class="block min-w-0 text-sm font-semibold text-slate-950">
-            {t("TENANTS.FORM_LABEL_ASSET")}
-            <select id="nicky-asset" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="nicky_default_blockchain_asset_id" required>{asset_option}</select>
-          </label>
+          <div>
+            <label class="block text-sm font-semibold text-slate-950">
+              {t("TENANTS.FORM_LABEL_ASSET")}
+              <select id="nicky-asset" class="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="nicky_default_blockchain_asset_id" required autocomplete="off">{asset_option}</select>
+            </label>
+          </div>
         </div>
-        <div class="mt-6 min-w-0 border-t border-slate-100 pt-6">
-          <h2 class="mb-5 text-lg font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_TICKET_TAILOR")}</h2>
-          <label class="block min-w-0 text-sm font-semibold text-slate-950">
-            {t("TENANTS.FORM_LABEL_API_KEY")}
+      </div>
+
+      <!-- Ticket Tailor section -->
+      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky lg:grid-cols-3">
+        <div>
+          <h2 class="text-base font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_TICKET_TAILOR")}</h2>
+          <div class="mt-3">
+            <a href="https://app.tickettailor.com/api" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900">
+              <i class="ph ph-key text-sm"></i>{t("TENANTS.FORM_GET_API_KEY")}<i class="ph ph-arrow-square-out text-xs"></i>
+            </a>
+          </div>
+        </div>
+        <div class="lg:col-span-2 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-slate-950">
+              {t("TENANTS.FORM_LABEL_API_KEY")}
+            </label>
             <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
               <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
-                <input id="ticket-tailor-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none disabled:bg-slate-50" name="ticket_tailor_api_key" type="password" placeholder="{e(ticket_tailor_placeholder)}" autocomplete="off">
+                <input id="ticket-tailor-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="ticket_tailor_api_key" type="password" placeholder="{e(ticket_tailor_placeholder)}" autocomplete="new-password">
                 <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="ticket-tailor-api-key" aria-label="Show Ticket Tailor API key" title="Show API key">{t("COMMON.SHOW")}</button>
               </div>
               <button id="validate-ticket-tailor-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
             </div>
-          </label>
-          <p id="ticket-tailor-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+            <p id="ticket-tailor-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+          </div>
           {webhook_block}
         </div>
-      </section>
+      </div>
+
+      <!-- Form actions -->
+      <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+        <div>{delete_action}</div>
+        <div class="flex gap-3">
+          <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{t("TENANTS.FORM_BUTTON_BACK")}</a>
+          <button id="save-tenant-button" class="inline-flex h-10 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" disabled>{save_label}</button>
+        </div>
+      </div>
     </form>
     <script>
       const tenantForm = document.querySelector('form[action="/admin-ui/tenants/save"]');
@@ -1574,8 +1625,8 @@ def truncated_id(value: Any) -> str:
     return f'<abbr class="cursor-help font-mono text-xs" title="{e(text)}">{e(short)}</abbr>'
 
 
-def orders_table(orders: list[dict[str, Any]]) -> str:
-    rows = "".join(order_row(order) for order in orders)
+def orders_table(orders: list[dict[str, Any]], tenant_names: dict[str, str] | None = None) -> str:
+    rows = "".join(order_row(order, tenant_names=tenant_names) for order in orders)
     if not rows:
         rows = f'<tr><td colspan="9" class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-transactions.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("ORDERS.NO_ORDERS")}</p><p class="mt-1 text-xs text-slate-400">{t("ORDERS.NO_ORDERS_HINT")}</p></td></tr>'
     return f"""
@@ -1600,13 +1651,18 @@ def orders_table(orders: list[dict[str, Any]]) -> str:
     """
 
 
-def order_row(order: dict[str, Any]) -> str:
+def order_row(order: dict[str, Any], tenant_names: dict[str, str] | None = None) -> str:
     tenant_id = str(order.get("tenant_id") or "")
     order_id = str(order.get("ticket_tailor_order_id") or "")
+    tenant_name = (tenant_names or {}).get(tenant_id)
+    tenant_cell = (
+        f'<strong class="font-semibold text-slate-950">{e(tenant_name)}</strong><br><small class="text-slate-400">{e(compact_identifier(tenant_id))}</small>'
+        if tenant_name else e(compact_identifier(tenant_id))
+    )
     return f"""
     <tr class="bg-white transition-colors duration-150 even:bg-[#f8f8f9] hover:bg-gray-50/80">
       <td class="border-b border-slate-100 px-4 py-3 align-top"><strong class="font-semibold text-slate-950">{e(order_id)}</strong></td>
-      <td class="border-b border-slate-100 px-4 py-3 align-top">{e(tenant_id)}</td>
+      <td class="border-b border-slate-100 px-4 py-3 align-top">{tenant_cell}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{e(order.get("buyer_email") or "-")}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{format_amount(order)}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{truncated_id(order.get("nicky_payment_request_id"))}</td>
@@ -1618,12 +1674,19 @@ def order_row(order: dict[str, Any]) -> str:
     """
 
 
-def webhook_table(webhooks: list[dict[str, Any]]) -> str:
+def webhook_table(webhooks: list[dict[str, Any]], tenant_names: dict[str, str] | None = None) -> str:
+    def _tenant_cell(wh: dict[str, Any]) -> str:
+        tid = str(wh.get("tenant_id") or "")
+        name = (tenant_names or {}).get(tid)
+        if name:
+            return f'<strong class="font-semibold text-slate-950">{e(name)}</strong><br><small class="text-slate-400">{e(compact_identifier(tid))}</small>'
+        return e(compact_identifier(tid))
+
     rows = "".join(
         f"""
         <tr class="bg-white transition-colors duration-150 even:bg-[#f8f8f9] hover:bg-gray-50/80">
           <td class="border-b border-slate-100 px-4 py-3 align-top">{e(webhook.get("received_at") or "")}</td>
-          <td class="border-b border-slate-100 px-4 py-3 align-top">{e(webhook.get("tenant_id") or "")}</td>
+          <td class="border-b border-slate-100 px-4 py-3 align-top">{_tenant_cell(webhook)}</td>
           <td class="border-b border-slate-100 px-4 py-3 align-top">{e(webhook.get("source") or "")}</td>
           <td class="border-b border-slate-100 px-4 py-3 align-top">{e(webhook.get("event_type") or "")}</td>
           <td class="border-b border-slate-100 px-4 py-3 align-top">{badge(str(webhook.get("status") or ""), webhook.get("status") != "failed")}</td>
@@ -1729,10 +1792,9 @@ def tenant_options(
 
 def tenant_option_label(tenant: TenantConfig) -> str:
     label = tenant.name.strip() if tenant.name else ""
-    short_id = compact_identifier(tenant.tenant_id)
     if label and label != tenant.tenant_id:
-        return f"{label} · {short_id}"
-    return short_id
+        return label
+    return compact_identifier(tenant.tenant_id)
 
 
 def compact_identifier(value: str, *, prefix: int = 8, suffix: int = 6) -> str:

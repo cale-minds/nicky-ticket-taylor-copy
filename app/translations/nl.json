@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "Totaal bestellingen",
     "METRIC_TOTAL_WEBHOOKS": "Totaal WebHooks",
     "METRIC_ACTIVE": "{{count}} actief",
-    "METRIC_ALL_TIME": "aller tijden"
+    "METRIC_ALL_TIME": "aller tijden",
+    "NO_TENANTS_CTA_TITLE": "Geen Tenants geconfigureerd",
+    "NO_TENANTS_CTA_HINT": "Koppel een Ticket Tailor-account om te beginnen.",
+    "NO_TENANTS_CTA_BUTTON": "Eerste Tenant toevoegen"
   },
   "TENANTS": {
     "TITLE": "Klantverbindingen",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "Nieuwe Tenant",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "API key ophalen",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Naam",

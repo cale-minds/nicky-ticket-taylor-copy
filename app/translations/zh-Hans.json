@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "总订单数",
     "METRIC_TOTAL_WEBHOOKS": "总 WebHook 数",
     "METRIC_ACTIVE": "{{count}} 个活跃",
-    "METRIC_ALL_TIME": "累计"
+    "METRIC_ALL_TIME": "累计",
+    "NO_TENANTS_CTA_TITLE": "暂无已配置的租户",
+    "NO_TENANTS_CTA_HINT": "连接一个 Ticket Tailor 账户以开始使用。",
+    "NO_TENANTS_CTA_BUTTON": "添加第一个租户"
   },
   "TENANTS": {
     "TITLE": "客户连接",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "新建租户",
     "FORM_TITLE_EDIT": "租户",
     "FORM_SECTION_TENANT": "租户",
+    "FORM_GET_API_KEY": "获取 API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "名称",

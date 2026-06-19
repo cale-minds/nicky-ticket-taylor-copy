@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "Ordrer i alt",
     "METRIC_TOTAL_WEBHOOKS": "WebHooks i alt",
     "METRIC_ACTIVE": "{{count}} aktive",
-    "METRIC_ALL_TIME": "til alle tider"
+    "METRIC_ALL_TIME": "til alle tider",
+    "NO_TENANTS_CTA_TITLE": "Ingen Tenants konfigureret",
+    "NO_TENANTS_CTA_HINT": "Forbind en Ticket Tailor-konto for at komme i gang.",
+    "NO_TENANTS_CTA_BUTTON": "Tilføj første Tenant"
   },
   "TENANTS": {
     "TITLE": "Kundeforbindelser",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "Ny Tenant",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "Hent API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Navn",

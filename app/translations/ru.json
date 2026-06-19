@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "Всего заказов",
     "METRIC_TOTAL_WEBHOOKS": "Всего WebHook",
     "METRIC_ACTIVE": "{{count}} активных",
-    "METRIC_ALL_TIME": "за всё время"
+    "METRIC_ALL_TIME": "за всё время",
+    "NO_TENANTS_CTA_TITLE": "Tenant ещё не настроены",
+    "NO_TENANTS_CTA_HINT": "Подключите аккаунт Ticket Tailor, чтобы начать.",
+    "NO_TENANTS_CTA_BUTTON": "Добавить первый Tenant"
   },
   "TENANTS": {
     "TITLE": "Подключения клиентов",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "Новый Tenant",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "Получить API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Имя",

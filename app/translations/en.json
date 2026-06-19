@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "Total orders",
     "METRIC_TOTAL_WEBHOOKS": "Total webhooks",
     "METRIC_ACTIVE": "{{count}} active",
-    "METRIC_ALL_TIME": "all time"
+    "METRIC_ALL_TIME": "all time",
+    "NO_TENANTS_CTA_TITLE": "No tenants configured",
+    "NO_TENANTS_CTA_HINT": "Connect a Ticket Tailor account to get started.",
+    "NO_TENANTS_CTA_BUTTON": "Add first tenant"
   },
   "TENANTS": {
     "TITLE": "Customer connections",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "New tenant",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "Get API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Name",

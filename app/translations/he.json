@@ -49,7 +49,10 @@
     "METRIC_TOTAL_ORDERS": "סך הזמנות",
     "METRIC_TOTAL_WEBHOOKS": "סך WebHooks",
     "METRIC_ACTIVE": "{{count}} פעילים",
-    "METRIC_ALL_TIME": "כל הזמנים"
+    "METRIC_ALL_TIME": "כל הזמנים",
+    "NO_TENANTS_CTA_TITLE": "לא הוגדרו Tenants",
+    "NO_TENANTS_CTA_HINT": "חבר חשבון Ticket Tailor כדי להתחיל.",
+    "NO_TENANTS_CTA_BUTTON": "הוסף Tenant ראשון"
   },
   "TENANTS": {
     "TITLE": "חיבורי לקוחות",
@@ -73,6 +76,7 @@
     "FORM_TITLE_NEW": "Tenant חדש",
     "FORM_TITLE_EDIT": "Tenant",
     "FORM_SECTION_TENANT": "Tenant",
+    "FORM_GET_API_KEY": "קבל API key",
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "שם",
