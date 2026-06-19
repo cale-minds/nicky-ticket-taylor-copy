@@ -32,7 +32,9 @@
     "OF": "из",
     "PAGE": "Страница",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "Строк на странице",
+    "NO_RESULTS": "0 результатов"
   },
   "PROFILE": {
     "ADMIN": "Администратор",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Имя",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "UUID Tenant",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "Email Nicky",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "Актив",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "Вставьте API key Nicky",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "Оставьте пустым, чтобы сохранить текущий",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "Оплата подтверждена",
     "FILTER_VOIDED": "Билеты аннулированы",
     "DETAIL_BUTTON_BACK": "Назад к заказам",
+    "DETAIL_TITLE": "Заказ {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "Выпущенные билеты были аннулированы через API Ticket Tailor. Ticket Tailor может по-прежнему отображать сам заказ как Ожидающий, поскольку статус офлайн-платежа задаётся на уровне заказа.",
     "DETAIL_SECTION_MAPPING": "Сопоставление заказа",
     "DETAIL_SECTION_ACTIONS": "Действия",
     "DETAIL_SECTION_LOGS": "Журнал заказа",

@@ -32,7 +32,9 @@
     "OF": "共",
     "PAGE": "页",
     "TENANT": "租户",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "每页行数",
+    "NO_RESULTS": "0 条结果"
   },
   "PROFILE": {
     "ADMIN": "管理员",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "名称",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "租户 UUID",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "Nicky 邮箱",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "资产",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "粘贴 Nicky API key",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "留空以保留现有密钥",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "支付已确认",
     "FILTER_VOIDED": "票据已作废",
     "DETAIL_BUTTON_BACK": "返回订单列表",
+    "DETAIL_TITLE": "订单 {{order_id}}",
+    "DETAIL_SUBTITLE": "租户 {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "已通过 Ticket Tailor API 作废已发出的票据。Ticket Tailor 仍可能将订单本身显示为待处理，因为线下支付状态是订单级别的。",
     "DETAIL_SECTION_MAPPING": "订单映射",
     "DETAIL_SECTION_ACTIONS": "操作",
     "DETAIL_SECTION_LOGS": "订单日志",

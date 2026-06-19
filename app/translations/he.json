@@ -32,7 +32,9 @@
     "OF": "מתוך",
     "PAGE": "עמוד",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "שורות בעמוד",
+    "NO_RESULTS": "0 תוצאות"
   },
   "PROFILE": {
     "ADMIN": "מנהל",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "שם",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "UUID של Tenant",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "דוא\"ל Nicky",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "נכס",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "הדבק API key של Nicky",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "השאר ריק כדי לשמור את הקיים",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "תשלום אושר",
     "FILTER_VOIDED": "כרטיסים בוטלו",
     "DETAIL_BUTTON_BACK": "חזור להזמנות",
+    "DETAIL_TITLE": "הזמנה {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "הכרטיסים שהונפקו בוטלו דרך ה-API של Ticket Tailor. Ticket Tailor עדיין עשוי להציג את ההזמנה עצמה כ-Pending מכיוון שסטטוס תשלום אופליין הוא ברמת ההזמנה.",
     "DETAIL_SECTION_MAPPING": "מיפוי הזמנה",
     "DETAIL_SECTION_ACTIONS": "פעולות",
     "DETAIL_SECTION_LOGS": "יומני הזמנה",

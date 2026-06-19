@@ -32,7 +32,9 @@
     "OF": "από",
     "PAGE": "Σελίδα",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "Γραμμές ανά σελίδα",
+    "NO_RESULTS": "0 αποτελέσματα"
   },
   "PROFILE": {
     "ADMIN": "Διαχειριστής",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Όνομα",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "UUID Tenant",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "Email Nicky",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "Περιουσιακό στοιχείο",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "Επικολλήστε το API key Nicky",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "Αφήστε κενό για διατήρηση του υπάρχοντος",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "Πληρωμή επιβεβαιώθηκε",
     "FILTER_VOIDED": "Εισιτήρια ακυρώθηκαν",
     "DETAIL_BUTTON_BACK": "Επιστροφή στις παραγγελίες",
+    "DETAIL_TITLE": "Παραγγελία {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "Τα εκδοθέντα εισιτήρια ακυρώθηκαν μέσω του API του Ticket Tailor. Το Ticket Tailor μπορεί να εξακολουθεί να εμφανίζει την ίδια την παραγγελία ως Εκκρεμής επειδή η κατάσταση πληρωμής offline είναι σε επίπεδο παραγγελίας.",
     "DETAIL_SECTION_MAPPING": "Αντιστοίχιση παραγγελίας",
     "DETAIL_SECTION_ACTIONS": "Ενέργειες",
     "DETAIL_SECTION_LOGS": "Αρχεία καταγραφής παραγγελίας",

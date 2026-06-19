@@ -32,7 +32,9 @@
     "OF": "of",
     "PAGE": "Page",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "Rows per page",
+    "NO_RESULTS": "0 results"
   },
   "PROFILE": {
     "ADMIN": "Admin",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Name",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "Tenant UUID",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "Nicky email",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "Asset",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "Paste Nicky API key",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "Leave blank to keep existing",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "Payment confirmed",
     "FILTER_VOIDED": "Tickets voided",
     "DETAIL_BUTTON_BACK": "Back to orders",
+    "DETAIL_TITLE": "Order {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "Issued tickets were voided through the Ticket Tailor API. Ticket Tailor can still show the order itself as Pending because offline payment status is order-level.",
     "DETAIL_SECTION_MAPPING": "Order mapping",
     "DETAIL_SECTION_ACTIONS": "Actions",
     "DETAIL_SECTION_LOGS": "Order logs",

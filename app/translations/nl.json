@@ -32,7 +32,9 @@
     "OF": "van",
     "PAGE": "Pagina",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "Rijen per pagina",
+    "NO_RESULTS": "0 resultaten"
   },
   "PROFILE": {
     "ADMIN": "Admin",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Naam",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "Tenant UUID",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "Nicky e-mail",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "Asset",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "Plak Nicky API key",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "Leeg laten om bestaande te behouden",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "Betaling bevestigd",
     "FILTER_VOIDED": "Tickets geannuleerd",
     "DETAIL_BUTTON_BACK": "Terug naar bestellingen",
+    "DETAIL_TITLE": "Bestelling {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "Uitgegeven tickets zijn geannuleerd via de Ticket Tailor API. Ticket Tailor kan de bestelling zelf nog steeds weergeven als In behandeling omdat de offline betalingsstatus op bestelniveau is.",
     "DETAIL_SECTION_MAPPING": "Bestellingskoppeling",
     "DETAIL_SECTION_ACTIONS": "Acties",
     "DETAIL_SECTION_LOGS": "Bestellingslogboek",

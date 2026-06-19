@@ -32,7 +32,9 @@
     "OF": "de",
     "PAGE": "Página",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "Linhas por página",
+    "NO_RESULTS": "0 resultados"
   },
   "PROFILE": {
     "ADMIN": "Admin",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Nome",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "UUID do tenant",
     "FORM_LABEL_API_KEY": "Chave de API",
     "FORM_LABEL_NICKY_EMAIL": "E-mail Nicky",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "Ativo",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "Cole a chave de API Nicky",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "Deixe em branco para manter a existente",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "Pagamento confirmado",
     "FILTER_VOIDED": "Ingressos cancelados",
     "DETAIL_BUTTON_BACK": "Voltar para pedidos",
+    "DETAIL_TITLE": "Pedido {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "Os ingressos emitidos foram cancelados pela API do Ticket Tailor. O Ticket Tailor ainda pode exibir o pedido como Pendente porque o status do pagamento offline é no nível do pedido.",
     "DETAIL_SECTION_MAPPING": "Mapeamento do pedido",
     "DETAIL_SECTION_ACTIONS": "Ações",
     "DETAIL_SECTION_LOGS": "Logs do pedido",

@@ -32,7 +32,9 @@
     "OF": "من",
     "PAGE": "صفحة",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "صفوف في الصفحة",
+    "NO_RESULTS": "0 نتائج"
   },
   "PROFILE": {
     "ADMIN": "مدير",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "الاسم",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "UUID الخاص بـ Tenant",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "بريد Nicky الإلكتروني",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "الأصل",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "الصق API key الخاصة بـ Nicky",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "اتركه فارغاً للإبقاء على المفتاح الحالي",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "تم تأكيد الدفع",
     "FILTER_VOIDED": "تذاكر ملغاة",
     "DETAIL_BUTTON_BACK": "العودة إلى الطلبات",
+    "DETAIL_TITLE": "الطلب {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "تم إلغاء التذاكر الصادرة عبر واجهة برمجة تطبيقات Ticket Tailor. قد يستمر Ticket Tailor في عرض الطلب نفسه كـ Pending لأن حالة الدفع غير المتصل تكون على مستوى الطلب.",
     "DETAIL_SECTION_MAPPING": "ربط الطلب",
     "DETAIL_SECTION_ACTIONS": "الإجراءات",
     "DETAIL_SECTION_LOGS": "سجلات الطلب",

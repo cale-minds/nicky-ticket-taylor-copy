@@ -200,7 +200,7 @@ def create_admin_ui_router(
             )
         ]
         body = f"""
-        <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 class="text-2xl font-semibold leading-8 text-slate-950">{t("DASHBOARD.TITLE")}</h1>
             <p class="mt-2 text-sm text-slate-500">{t("DASHBOARD.SUBTITLE")}</p>
@@ -264,7 +264,7 @@ def create_admin_ui_router(
             **tenant_scope.tenant_filters,
         )
         body = f"""
-        <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 class="text-2xl font-semibold leading-8 text-slate-950">{t("TENANTS.TITLE")}</h1>
             <p class="mt-2 text-sm text-slate-500">{t("TENANTS.SUBTITLE")}</p>
@@ -497,7 +497,7 @@ def create_admin_ui_router(
             )
         ]
         body = f"""
-        <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 class="text-2xl font-semibold leading-8 text-slate-950">{t("ORDERS.TITLE")}</h1>
             <p class="mt-2 text-sm text-slate-500">{t("ORDERS.SUBTITLE")}</p>
@@ -529,6 +529,9 @@ def create_admin_ui_router(
         if not row:
             raise HTTPException(status_code=404, detail="Order not found")
         order = row_to_dict(row)
+        tenant_config = db.get_tenant(tenant)
+        tenant_display = (tenant_config.name or "").strip() if tenant_config else ""
+        tenant_label = tenant_display if tenant_display else compact_identifier(tenant)
         log_page = page_query_value(request.query_params.get("logs_page"))
         logs_total = db.count_order_logs(tenant, ticket_tailor_order_id)
         logs = [
@@ -541,10 +544,10 @@ def create_admin_ui_router(
             )
         ]
         body = f"""
-        <section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <h1 class="text-2xl font-semibold leading-8 text-slate-950">Order {e(ticket_tailor_order_id)}</h1>
-            <p class="mt-2 text-sm text-slate-500">Tenant {e(tenant)} / buyer {e(order.get("buyer_email") or "")}</p>
+            <h1 class="text-2xl font-semibold leading-8 text-slate-950">{t("ORDERS.DETAIL_TITLE", order_id=e(ticket_tailor_order_id))}</h1>
+            <p class="mt-2 text-sm text-slate-500">{t("ORDERS.DETAIL_SUBTITLE", tenant=e(tenant_label), buyer=e(order.get("buyer_email") or ""))}</p>
           </div>
           <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/orders?tenant_id={u(tenant)}">{t("ORDERS.DETAIL_BUTTON_BACK")}</a>
         </section>
@@ -642,12 +645,13 @@ def page(
     settings: Settings,
 ) -> str:
     user_block = ""
+    hamburger_user_section = ""
     if user:
         easter_egg = user_easter_egg(user, settings)
         initials = e("".join(p[0].upper() for p in (user.name or "?").split()[:2]))
         email = e(user.email or "")
         user_block = f"""
-        <div class="flex items-center gap-3 text-sm">
+        <div class="hidden items-center gap-3 text-sm md:flex">
           {lang_switcher(current_path)}
           <div class="relative" id="user-menu-wrapper">
             <button type="button" onclick="document.getElementById('user-menu').classList.toggle('hidden')"
@@ -679,8 +683,51 @@ def page(
           }});
         </script>
         """
+        locale = current_locale()
+        locale_name = e(LOCALE_NAMES.get(locale, locale))
+        locale_items = "".join(
+            f'<a class="flex items-center gap-2.5 px-4 py-2 text-sm {"font-semibold text-slate-950" if lc == locale else "text-slate-700"} hover:bg-slate-50" href="/admin-ui/set-language?lang={e(lc)}&next={e(current_path)}"><img src="/admin-ui/assets/flags/{e(lc)}.svg" class="h-4 w-6 rounded-sm object-cover" alt="{e(lc)}"><span>{e(LOCALE_NAMES.get(lc, lc))}</span></a>'
+            for lc in SUPPORTED_LOCALES
+        )
+        hamburger_user_section = f"""
+        <div class="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white">{initials}</span>
+          <div class="min-w-0 flex-1">
+            <p class="flex items-center gap-1 truncate font-semibold text-slate-900">{e(user.name)}{easter_egg}</p>
+            <p class="truncate text-xs text-slate-400">{email}</p>
+          </div>
+        </div>
+        <div class="relative border-b border-slate-100" id="hamburger-lang-wrapper">
+          <button type="button" onclick="document.getElementById('hamburger-lang-menu').classList.toggle('hidden')"
+            class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
+            <img src="/admin-ui/assets/flags/{e(locale)}.svg" class="h-4 w-6 rounded-sm object-cover" alt="{e(locale)}">
+            <span class="flex-1 text-left">{locale_name}</span>
+            <i class="ph ph-caret-down text-xs text-slate-400"></i>
+          </button>
+          <div id="hamburger-lang-menu" class="hidden border-t border-slate-100 bg-slate-50 py-1">
+            {locale_items}
+          </div>
+        </div>
+        <a href="/admin-ui/logout" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
+          <i class="ph ph-sign-out text-base text-slate-400"></i>
+          {t("NAV.LOG_OUT")}
+        </a>
+        <script>
+          document.addEventListener('click', function(ev) {{
+            var w2 = document.getElementById('hamburger-lang-wrapper');
+            if (w2 && !w2.contains(ev.target)) {{
+              var m2 = document.getElementById('hamburger-lang-menu');
+              if (m2) m2.classList.add('hidden');
+            }}
+          }});
+        </script>
+        """
     nav = "".join(
         nav_link(t(key), href, current_path, icon)
+        for key, href, icon in _NAV_ITEMS
+    )
+    nav_dropdown = "".join(
+        nav_dropdown_link(t(key), href, current_path, icon)
         for key, href, icon in _NAV_ITEMS
     )
     locale = current_locale()
@@ -723,14 +770,36 @@ def page(
     </div>
   </div>
 
-  <header class="flex min-h-20 w-full flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 md:px-10 xl:px-14">
-    <div class="flex min-w-0 flex-wrap items-center gap-4 md:gap-6">
+  <header class="flex w-full items-center justify-between border-b border-slate-200 bg-white px-5 py-3 md:px-10 md:py-4 xl:px-14">
+    <div class="flex min-w-0 items-center gap-4 md:gap-6">
       <strong class="nicky-logo">Nicky Ticket Tailor Admin</strong>
       <span class="hidden min-h-7 items-center border-l border-slate-300 pl-6 text-base font-semibold text-slate-700 sm:inline-flex">Ticket Tailor Admin</span>
-      <nav id="page-nav" class="flex min-w-0 flex-wrap items-center gap-1 md:gap-2">{nav}</nav>
+      <nav id="page-nav" class="hidden min-w-0 items-center gap-2 md:flex">{nav}</nav>
     </div>
-    {user_block}
+    <div class="flex items-center gap-2">
+      {user_block}
+      <div class="relative md:hidden" id="hamburger-wrapper">
+        <button type="button" id="hamburger-btn" aria-label="Menu"
+          onclick="document.getElementById('hamburger-menu').classList.toggle('hidden')"
+          class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
+          <i class="ph ph-list text-lg"></i>
+        </button>
+        <div id="hamburger-menu" class="absolute right-0 z-50 mt-1 hidden min-w-[200px] rounded-xl border border-slate-100 bg-white py-1 shadow-nicky">
+          {nav_dropdown}
+          <div class="border-t border-slate-100 pt-1">{hamburger_user_section}</div>
+        </div>
+      </div>
+    </div>
   </header>
+  <script>
+    document.addEventListener('click', function(ev) {{
+      var w = document.getElementById('hamburger-wrapper');
+      if (w && !w.contains(ev.target)) {{
+        var m = document.getElementById('hamburger-menu');
+        if (m) m.classList.add('hidden');
+      }}
+    }});
+  </script>
   <main id="page-main" class="w-full min-w-0 flex-1 overflow-x-hidden px-5 py-6 md:px-10 xl:px-14">{body}</main>
   <footer class="border-t border-gray-100 bg-white text-xs">
     <div class="flex min-h-[52px] flex-col-reverse items-center justify-between gap-2 px-5 py-3 sm:flex-row sm:items-center md:px-10 xl:px-14">
@@ -1010,6 +1079,12 @@ def nav_link(label: str, href: str, current_path: str, icon: str = "") -> str:
     return f'<a class="{base} {active}" href="{href}">{icon_html}{e(label)}</a>'
 
 
+def nav_dropdown_link(label: str, href: str, current_path: str, icon: str = "") -> str:
+    active = "font-semibold text-slate-950 bg-slate-50" if href == current_path else "text-slate-700"
+    icon_html = f'<i class="ph {e(icon)} text-base text-slate-400"></i>' if icon else ""
+    return f'<a class="flex items-center gap-3 px-4 py-2.5 text-sm {active} hover:bg-slate-50" href="{href}">{icon_html}{e(label)}</a>'
+
+
 def lang_switcher(current_path: str) -> str:
     locale = current_locale()
     name = LOCALE_NAMES.get(locale, locale)
@@ -1212,31 +1287,64 @@ def tenant_table(
     framed: bool = True,
 ) -> str:
     rows = "".join(tenant_row(tenant, user=user, settings=settings) for tenant in tenants)
+    mobile_cards = "".join(tenant_mobile_card(tenant, user=user, settings=settings) for tenant in tenants)
+    empty_state = f'<div class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-contacts.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("TENANTS.NO_TENANTS")}</p><p class="mt-1 text-xs text-slate-400">{t("TENANTS.NO_TENANTS_HINT")}</p></div>'
     if not rows:
         rows = f'<tr><td colspan="9" class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-contacts.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("TENANTS.NO_TENANTS")}</p><p class="mt-1 text-xs text-slate-400">{t("TENANTS.NO_TENANTS_HINT")}</p></td></tr>'
+        mobile_cards = empty_state
     wrapper = (
         'class="min-w-0 overflow-x-auto rounded-xl border border-slate-100 bg-white shadow-nicky"'
         if framed
-        else 'class="min-w-0 overflow-x-auto"'
+        else 'class="min-w-0"'
     )
     return f"""
     <div {wrapper}>
-      <table class="w-full min-w-[900px] border-separate border-spacing-0 text-left">
-        <thead>
-          <tr class="bg-gray-100 text-xs font-semibold text-gray-600">
-            <th class="border-b border-slate-100 px-4 py-3">{t("COMMON.TENANT")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_NICKY_EMAIL")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.FILTER_ACTIVE")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_TICKET_TAILOR")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_NICKY")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_ASSET")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_CREATED")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_UPDATED")}</th>
-            <th class="border-b border-slate-100 px-4 py-3"></th>
-          </tr>
-        </thead>
-        <tbody>{rows}</tbody>
-      </table>
+      <div class="hidden md:block overflow-x-auto">
+        <table class="w-full min-w-[900px] border-separate border-spacing-0 text-left">
+          <thead>
+            <tr class="bg-gray-100 text-xs font-semibold text-gray-600">
+              <th class="border-b border-slate-100 px-4 py-3">{t("COMMON.TENANT")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_NICKY_EMAIL")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.FILTER_ACTIVE")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_TICKET_TAILOR")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_NICKY")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_ASSET")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_CREATED")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("TENANTS.TABLE_UPDATED")}</th>
+              <th class="border-b border-slate-100 px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      <div class="divide-y divide-slate-100 md:hidden">{mobile_cards}</div>
+    </div>
+    """
+
+
+def tenant_mobile_card(tenant: TenantConfig, *, user: admin_auth.AdminUser, settings: Settings) -> str:
+    safe = tenant_to_safe_dict(tenant)
+    actions = ""
+    if can_write_tenants(user, settings):
+        actions = f'<a class="shrink-0 inline-flex h-9 items-center gap-2 rounded-lg bg-black px-3 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/tenants/{u(tenant.tenant_id)}/edit"><i class="ph ph-pencil text-sm"></i>{t("COMMON.EDIT")}</a>'
+    tt_badge = badge(t("COMMON.CONFIGURED") if safe["ticket_tailor_configured"] else t("COMMON.MISSING"), safe["ticket_tailor_configured"])
+    nicky_badge = badge(t("COMMON.CONFIGURED") if safe["nicky_configured"] else t("COMMON.MISSING"), safe["nicky_configured"])
+    active_badge = badge(t("COMMON.ACTIVE") if tenant.active else t("COMMON.INACTIVE"), tenant.active)
+    return f"""
+    <div class="flex items-start justify-between gap-3 px-4 py-4">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <strong class="font-semibold text-slate-950">{e(tenant.name or tenant.tenant_id)}</strong>
+          {active_badge}
+        </div>
+        <p class="mt-0.5 text-xs text-slate-400">{e(compact_identifier(tenant.tenant_id))}</p>
+        <p class="mt-1.5 text-sm text-slate-600">{e(tenant.nicky_user_email or "-")}</p>
+        <div class="mt-2 flex flex-wrap gap-2">
+          <span class="inline-flex items-center gap-1 text-xs text-slate-400">{t("TENANTS.TABLE_TICKET_TAILOR")}: {tt_badge}</span>
+          <span class="inline-flex items-center gap-1 text-xs text-slate-400">{t("TENANTS.TABLE_NICKY")}: {nicky_badge}</span>
+        </div>
+      </div>
+      {actions}
     </div>
     """
 
@@ -1341,18 +1449,18 @@ def tenant_form(
       {hidden_tenant_id}
 
       <!-- Tenant section -->
-      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky lg:grid-cols-3">
+      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky md:grid-cols-3">
         <div>
           <h2 class="text-base font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_TENANT")}</h2>
         </div>
-        <div class="lg:col-span-2 space-y-5">
-          {text_input(t("TENANTS.FORM_LABEL_NAME"), "name", value=tenant.name if not is_new else "")}
+        <div class="md:col-span-2 space-y-5">
+          {text_input(t("TENANTS.FORM_LABEL_NAME"), "name", value=tenant.name if not is_new else "", placeholder=t("TENANTS.FORM_PLACEHOLDER_NAME"))}
           {tenant_uuid_block}
         </div>
       </div>
 
       <!-- Nicky section -->
-      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky lg:grid-cols-3">
+      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky md:grid-cols-3">
         <div>
           <h2 class="text-base font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_NICKY")}</h2>
           <div class="mt-3">
@@ -1361,15 +1469,15 @@ def tenant_form(
             </a>
           </div>
         </div>
-        <div class="lg:col-span-2 space-y-5">
+        <div class="md:col-span-2 space-y-5">
           <div>
-            <label class="block text-sm font-semibold text-slate-950">
+            <label for="nicky-api-key" class="block text-sm font-semibold text-slate-950">
               {t("TENANTS.FORM_LABEL_API_KEY")}
             </label>
             <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
               <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
                 <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="new-password">
-                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="Show Nicky API key" title="Show API key">{t("COMMON.SHOW")}</button>
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="{t("COMMON.SHOW")}" title="{t("COMMON.SHOW")}">{t("COMMON.SHOW")}</button>
               </div>
               <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
             </div>
@@ -1378,7 +1486,7 @@ def tenant_form(
           <div>
             <label class="block text-sm font-semibold text-slate-950">
               {t("TENANTS.FORM_LABEL_NICKY_EMAIL")}
-              <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}" autocomplete="off"{nicky_identity_readonly}>
+              <input id="nicky-email" class="{nicky_identity_class}" name="nicky_user_email" type="email" value="{e(nicky_email_value)}" placeholder="{t("TENANTS.FORM_PLACEHOLDER_NICKY_EMAIL")}" autocomplete="off"{nicky_identity_readonly}>
             </label>
           </div>
           <div>
@@ -1391,7 +1499,7 @@ def tenant_form(
       </div>
 
       <!-- Ticket Tailor section -->
-      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky lg:grid-cols-3">
+      <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky md:grid-cols-3">
         <div>
           <h2 class="text-base font-semibold text-slate-950">{t("TENANTS.FORM_SECTION_TICKET_TAILOR")}</h2>
           <div class="mt-3">
@@ -1400,15 +1508,15 @@ def tenant_form(
             </a>
           </div>
         </div>
-        <div class="lg:col-span-2 space-y-5">
+        <div class="md:col-span-2 space-y-5">
           <div>
-            <label class="block text-sm font-semibold text-slate-950">
+            <label for="ticket-tailor-api-key" class="block text-sm font-semibold text-slate-950">
               {t("TENANTS.FORM_LABEL_API_KEY")}
             </label>
             <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
               <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
                 <input id="ticket-tailor-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="ticket_tailor_api_key" type="password" placeholder="{e(ticket_tailor_placeholder)}" autocomplete="new-password">
-                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="ticket-tailor-api-key" aria-label="Show Ticket Tailor API key" title="Show API key">{t("COMMON.SHOW")}</button>
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="ticket-tailor-api-key" aria-label="{t("COMMON.SHOW")}" title="{t("COMMON.SHOW")}">{t("COMMON.SHOW")}</button>
               </div>
               <button id="validate-ticket-tailor-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
             </div>
@@ -1486,7 +1594,7 @@ def tenant_form(
           const showing = input.type === "text";
           input.type = showing ? "password" : "text";
           button.textContent = showing ? "{t("COMMON.SHOW")}" : "{t("COMMON.HIDE")}";
-          button.setAttribute("aria-label", `${{showing ? "Show" : "Hide"}} API key`);
+          button.setAttribute("aria-label", showing ? "{t("COMMON.SHOW")}" : "{t("COMMON.HIDE")}");
         }});
       }});
 
@@ -1627,26 +1735,56 @@ def truncated_id(value: Any) -> str:
 
 def orders_table(orders: list[dict[str, Any]], tenant_names: dict[str, str] | None = None) -> str:
     rows = "".join(order_row(order, tenant_names=tenant_names) for order in orders)
+    mobile_cards = "".join(order_mobile_card(order, tenant_names=tenant_names) for order in orders)
+    empty_state = f'<div class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-transactions.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("ORDERS.NO_ORDERS")}</p><p class="mt-1 text-xs text-slate-400">{t("ORDERS.NO_ORDERS_HINT")}</p></div>'
     if not rows:
         rows = f'<tr><td colspan="9" class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-transactions.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("ORDERS.NO_ORDERS")}</p><p class="mt-1 text-xs text-slate-400">{t("ORDERS.NO_ORDERS_HINT")}</p></td></tr>'
+        mobile_cards = empty_state
     return f"""
-    <div class="min-w-0 overflow-x-auto">
-      <table class="w-full min-w-[980px] border-separate border-spacing-0 text-left">
-        <thead>
-          <tr class="bg-gray-100 text-xs font-semibold text-gray-600">
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_ORDER")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_TENANT")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_BUYER")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_AMOUNT")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_NICKY_PR")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_NICKY_STATUS")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_TT_STATE")}</th>
-            <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_UPDATED")}</th>
-            <th class="border-b border-slate-100 px-4 py-3"></th>
-          </tr>
-        </thead>
-        <tbody>{rows}</tbody>
-      </table>
+    <div class="min-w-0">
+      <div class="hidden md:block overflow-x-auto">
+        <table class="w-full min-w-[980px] border-separate border-spacing-0 text-left">
+          <thead>
+            <tr class="bg-gray-100 text-xs font-semibold text-gray-600">
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_ORDER")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_TENANT")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_BUYER")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_AMOUNT")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_NICKY_PR")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_NICKY_STATUS")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_TT_STATE")}</th>
+              <th class="border-b border-slate-100 px-4 py-3">{t("ORDERS.TABLE_UPDATED")}</th>
+              <th class="border-b border-slate-100 px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      <div class="divide-y divide-slate-100 md:hidden">{mobile_cards}</div>
+    </div>
+    """
+
+
+def order_mobile_card(order: dict[str, Any], tenant_names: dict[str, str] | None = None) -> str:
+    tenant_id = str(order.get("tenant_id") or "")
+    order_id = str(order.get("ticket_tailor_order_id") or "")
+    tenant_name = (tenant_names or {}).get(tenant_id)
+    tenant_label = tenant_name or compact_identifier(tenant_id)
+    return f"""
+    <div class="flex items-start justify-between gap-3 px-4 py-4">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <strong class="font-semibold text-slate-950">{e(order_id)}</strong>
+          {ticket_tailor_state_cell(order)}
+        </div>
+        <p class="mt-0.5 text-sm text-slate-600">{e(tenant_label)} · {e(order.get("buyer_email") or "-")}</p>
+        <p class="mt-1 text-sm font-medium text-slate-950">{format_amount(order)}</p>
+        <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {nicky_status_badge(order.get("nicky_status"))}
+          <span class="text-xs text-slate-400">{e(order.get("updated_at") or "")}</span>
+        </div>
+      </div>
+      <a class="shrink-0 inline-flex h-9 items-center rounded-lg bg-black px-3 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a>
     </div>
     """
 
@@ -1675,6 +1813,11 @@ def order_row(order: dict[str, Any], tenant_names: dict[str, str] | None = None)
 
 
 def webhook_table(webhooks: list[dict[str, Any]], tenant_names: dict[str, str] | None = None) -> str:
+    def _tenant_label(wh: dict[str, Any]) -> str:
+        tid = str(wh.get("tenant_id") or "")
+        name = (tenant_names or {}).get(tid)
+        return name or compact_identifier(tid)
+
     def _tenant_cell(wh: dict[str, Any]) -> str:
         tid = str(wh.get("tenant_id") or "")
         name = (tenant_names or {}).get(tid)
@@ -1694,14 +1837,32 @@ def webhook_table(webhooks: list[dict[str, Any]], tenant_names: dict[str, str] |
         """
         for webhook in webhooks
     )
+    mobile_cards = "".join(
+        f"""
+        <div class="px-4 py-4">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-semibold text-slate-950">{e(webhook.get("event_type") or "")}</span>
+            {badge(str(webhook.get("status") or ""), webhook.get("status") != "failed")}
+          </div>
+          <p class="mt-0.5 text-xs text-slate-400">{e(webhook.get("received_at") or "")}</p>
+          <p class="mt-1 text-sm text-slate-600">{e(webhook.get("source") or "")} · {e(_tenant_label(webhook))}</p>
+        </div>
+        """
+        for webhook in webhooks
+    )
+    empty_state = f'<div class="px-4 py-10 text-center"><i class="ph ph-webhooks mb-3 block text-4xl text-slate-300"></i><p class="text-sm font-semibold text-slate-700">{t("WEBHOOKS.NO_WEBHOOKS")}</p><p class="mt-1 text-xs text-slate-400">{t("WEBHOOKS.NO_WEBHOOKS_HINT")}</p></div>'
     if not rows:
         rows = f'<tr><td colspan="5" class="px-4 py-10 text-center"><i class="ph ph-webhooks mb-3 block text-4xl text-slate-300"></i><p class="text-sm font-semibold text-slate-700">{t("WEBHOOKS.NO_WEBHOOKS")}</p><p class="mt-1 text-xs text-slate-400">{t("WEBHOOKS.NO_WEBHOOKS_HINT")}</p></td></tr>'
+        mobile_cards = empty_state
     return f"""
-    <div class="min-w-0 overflow-x-auto">
-      <table class="w-full min-w-[760px] border-separate border-spacing-0 text-left">
-        <thead><tr class="bg-gray-100 text-xs font-semibold text-gray-600"><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_RECEIVED")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_TENANT")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_SOURCE")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_TYPE")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_STATUS")}</th></tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
+    <div class="min-w-0">
+      <div class="hidden md:block overflow-x-auto">
+        <table class="w-full min-w-[760px] border-separate border-spacing-0 text-left">
+          <thead><tr class="bg-gray-100 text-xs font-semibold text-gray-600"><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_RECEIVED")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_TENANT")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_SOURCE")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_TYPE")}</th><th class="border-b border-slate-100 px-4 py-3">{t("WEBHOOKS.TABLE_STATUS")}</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+      <div class="divide-y divide-slate-100 md:hidden">{mobile_cards}</div>
     </div>
     """
 
@@ -1784,7 +1945,7 @@ def order_actions(order: dict[str, Any], *, user: admin_auth.AdminUser, settings
 def tenant_options(
     tenants: list[TenantConfig], selected: str | None, *, include_all: bool = True
 ) -> str:
-    options = option_tag("", "All tenants", selected or "") if include_all else ""
+    options = option_tag("", t("COMMON.ALL_TENANTS"), selected or "") if include_all else ""
     for tenant in tenants:
         options += option_tag(tenant.tenant_id, tenant_option_label(tenant), selected or "")
     return options
@@ -1813,14 +1974,14 @@ def tenant_filter_field(
     if not include_all and len(tenants) == 1:
         tenant = tenants[0]
         return f"""
-        <label class="min-w-0 text-sm font-semibold text-slate-950">Tenant
+        <label class="min-w-0 text-sm font-semibold text-slate-950">{t("COMMON.TENANT")}
           <input type="hidden" name="{e(name)}" value="{e(tenant.tenant_id)}">
           <div class="mt-2 flex h-11 min-w-0 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 shadow-sm" title="{e(tenant.tenant_id)}">
             <span class="min-w-0 truncate font-semibold">{e(tenant_option_label(tenant))}</span>
           </div>
         </label>
         """
-    return f'<label class="min-w-0 text-sm font-semibold text-slate-950">Tenant<select class="mt-2 h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="{e(name)}">{tenant_options(tenants, selected, include_all=include_all)}</select></label>'
+    return f'<label class="min-w-0 text-sm font-semibold text-slate-950">{t("COMMON.TENANT")}<select class="mt-2 h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm outline-none focus:ring-2 focus:ring-black" name="{e(name)}">{tenant_options(tenants, selected, include_all=include_all)}</select></label>'
 
 
 def tenant_page_filters(request: Request) -> dict[str, str | None]:
@@ -1942,10 +2103,10 @@ def order_filters_form(
     options = "".join(
         option_tag(value, label, selected)
         for value, label in [
-            ("", "All states"),
-            ("pending", "Order pending"),
-            ("confirmed", "Payment confirmed"),
-            ("tickets_voided", "Tickets voided"),
+            ("", t("COMMON.ALL_STATES")),
+            ("pending", t("ORDERS.FILTER_PENDING")),
+            ("confirmed", t("ORDERS.FILTER_CONFIRMED")),
+            ("tickets_voided", t("ORDERS.FILTER_VOIDED")),
         ]
     )
     selected_tenant = str(order_filters.get("tenant_id") or "")
@@ -2031,10 +2192,10 @@ def orders_page_filters_form(
     options = "".join(
         option_tag(value, label, selected)
         for value, label in [
-            ("", "All states"),
-            ("pending", "Order pending"),
-            ("confirmed", "Payment confirmed"),
-            ("tickets_voided", "Tickets voided"),
+            ("", t("COMMON.ALL_STATES")),
+            ("pending", t("ORDERS.FILTER_PENDING")),
+            ("confirmed", t("ORDERS.FILTER_CONFIRMED")),
+            ("tickets_voided", t("ORDERS.FILTER_VOIDED")),
         ]
     )
     tenant_field = ""
@@ -2119,7 +2280,7 @@ def pagination_controls(
         if can_next else
         '<span class="inline-flex h-7 w-7 items-center justify-center rounded text-slate-300 pointer-events-none"><i class="ph ph-caret-right text-sm"></i></span>'
     )
-    count_text = f"{start} - {end} of {total}" if total > 0 else "0 results"
+    count_text = f"{start} - {end} of {total}" if total > 0 else t("COMMON.NO_RESULTS")
     rows_per_page_html = ""
     if size_param and size_options:
         opts = "".join(
@@ -2128,14 +2289,14 @@ def pagination_controls(
         )
         rows_per_page_html = f"""
         <div class="flex items-center gap-2 text-slate-500">
-          <span class="whitespace-nowrap">Rows per page:</span>
+          <span class="whitespace-nowrap">{t("COMMON.ROWS_PER_PAGE")}:</span>
           <select class="h-7 rounded border border-slate-200 bg-white px-1 text-xs font-semibold text-slate-700 focus:outline-none"
             onchange="(function(s){{var u=new URL(window.location.href);u.searchParams.set('{e(size_param)}',s);u.searchParams.delete('{e(page_param)}');window.location.href=u.toString();}})(this.value)">
             {opts}
           </select>
         </div>"""
     return f"""
-    <div class="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-sm text-slate-500">
+    <div class="flex flex-col gap-2 border-t border-slate-100 px-4 py-3 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
       <span>{count_text}</span>
       <div class="flex items-center gap-3">
         {rows_per_page_html}
@@ -2233,13 +2394,13 @@ def option_tag(value: str, label: str, selected: str) -> str:
 
 def ticket_tailor_state_cell(order: dict[str, Any]) -> str:
     if order.get("ticket_tailor_confirmed_at"):
-        return badge("Payment confirmed", True)
+        return badge(t("ORDERS.STATE_CONFIRMED"), True)
     if order.get("ticket_tailor_tickets_voided_at"):
         return (
-            f'{badge("Tickets voided", False)}'
-            '<small class="mt-1 block max-w-48 text-xs leading-4 text-slate-400">Order still pending in Ticket Tailor</small>'
+            f'{badge(t("ORDERS.STATE_VOIDED"), False)}'
+            f'<small class="mt-1 block max-w-48 text-xs leading-4 text-slate-400">{t("ORDERS.FILTER_PENDING")}</small>'
         )
-    return badge("Order pending", "warn")
+    return badge(t("ORDERS.STATE_PENDING"), "warn")
 
 
 def ticket_tailor_state_notice(order: dict[str, Any]) -> str:
@@ -2248,7 +2409,7 @@ def ticket_tailor_state_notice(order: dict[str, Any]) -> str:
     return """
     <p class="notice-warn mb-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm font-medium">
       <i class="ph ph-warning mt-0.5 shrink-0"></i>
-      Issued tickets were voided through the Ticket Tailor API. Ticket Tailor can still show the order itself as Pending because offline payment status is order-level.
+      {t("ORDERS.DETAIL_VOID_NOTICE")}
     </p>
     """
 

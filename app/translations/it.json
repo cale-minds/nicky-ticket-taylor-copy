@@ -32,7 +32,9 @@
     "OF": "di",
     "PAGE": "Pagina",
     "TENANT": "Tenant",
-    "PAYLOAD": "Payload"
+    "PAYLOAD": "Payload",
+    "ROWS_PER_PAGE": "Righe per pagina",
+    "NO_RESULTS": "0 risultati"
   },
   "PROFILE": {
     "ADMIN": "Admin",
@@ -80,9 +82,11 @@
     "FORM_SECTION_NICKY": "Nicky",
     "FORM_SECTION_TICKET_TAILOR": "Ticket Tailor",
     "FORM_LABEL_NAME": "Nome",
+    "FORM_PLACEHOLDER_NAME": "e.g. Acme Events",
     "FORM_LABEL_UUID": "UUID Tenant",
     "FORM_LABEL_API_KEY": "API key",
     "FORM_LABEL_NICKY_EMAIL": "Email Nicky",
+    "FORM_PLACEHOLDER_NICKY_EMAIL": "nicky@example.com",
     "FORM_LABEL_ASSET": "Asset",
     "FORM_PLACEHOLDER_NICKY_KEY_NEW": "Incolla la API key Nicky",
     "FORM_PLACEHOLDER_NICKY_KEY_EDIT": "Lascia vuoto per mantenere quella esistente",
@@ -124,6 +128,9 @@
     "FILTER_CONFIRMED": "Pagamento confermato",
     "FILTER_VOIDED": "Biglietti annullati",
     "DETAIL_BUTTON_BACK": "Torna agli ordini",
+    "DETAIL_TITLE": "Ordine {{order_id}}",
+    "DETAIL_SUBTITLE": "Tenant {{tenant}} · {{buyer}}",
+    "DETAIL_VOID_NOTICE": "I biglietti emessi sono stati annullati tramite l'API di Ticket Tailor. Ticket Tailor può ancora mostrare l'ordine stesso come In attesa perché lo stato del pagamento offline è a livello di ordine.",
     "DETAIL_SECTION_MAPPING": "Mappatura ordine",
     "DETAIL_SECTION_ACTIONS": "Azioni",
     "DETAIL_SECTION_LOGS": "Log ordine",
