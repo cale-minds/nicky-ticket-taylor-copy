@@ -200,6 +200,7 @@ def create_admin_ui_router(
             )
         ]
         body = f"""
+        {setup_modal(user, tenants, settings)}
         <section class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 class="text-2xl font-semibold leading-8 text-slate-950">{t("DASHBOARD.TITLE")}</h1>
@@ -319,6 +320,7 @@ def create_admin_ui_router(
                     saved=request.query_params.get("saved") == "1",
                     message=request.query_params.get("message"),
                     warn=request.query_params.get("warn"),
+                    activate_conflict=request.query_params.get("activate_conflict"),
                 ),
                 current_path="/admin-ui/tenants",
                 settings=settings,
@@ -474,6 +476,37 @@ def create_admin_ui_router(
         tenant = get_tenant_or_404(db, tenant_id)
         require_tenant_visible(user, settings, tenant)
         db.deactivate_tenant(tenant.tenant_id)
+        return RedirectResponse("/admin-ui/tenants", status_code=303)
+
+    @router.post("/admin-ui/tenants/{tenant_id}/activate")
+    async def activate_tenant(
+        tenant_id: str, user: admin_auth.AdminUser = Depends(require_admin_web)
+    ):
+        if not can_write_tenants(user, settings):
+            raise HTTPException(status_code=403, detail="Support access is read-only")
+        tenant = get_tenant_or_404(db, tenant_id)
+        require_tenant_visible(user, settings, tenant)
+        conflict_nicky = (
+            db.find_active_tenant_by_api_key(
+                "nicky_api_key", tenant.nicky_api_key or "", exclude_tenant_id=tenant_id
+            )
+            if tenant.nicky_api_key
+            else None
+        )
+        conflict_tt = (
+            db.find_active_tenant_by_api_key(
+                "ticket_tailor_api_key", tenant.ticket_tailor_api_key or "", exclude_tenant_id=tenant_id
+            )
+            if tenant.ticket_tailor_api_key
+            else None
+        )
+        if conflict_nicky or conflict_tt:
+            conflict_id = (conflict_nicky or conflict_tt).tenant_id
+            return RedirectResponse(
+                f"/admin-ui/tenants/{urllib.parse.quote(tenant_id)}/edit?activate_conflict={urllib.parse.quote(conflict_id)}",
+                status_code=303,
+            )
+        db.activate_tenant(tenant.tenant_id)
         return RedirectResponse("/admin-ui/tenants", status_code=303)
 
     @router.get("/admin-ui/orders", response_class=HTMLResponse)
@@ -1235,6 +1268,44 @@ def new_tenant_link(user: admin_auth.AdminUser, tenants: list[TenantConfig], set
     return f'<a class="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/tenants/new"><i class="ph ph-plus text-sm"></i>{t("TENANTS.BUTTON_NEW")}</a>'
 
 
+def setup_modal(user: admin_auth.AdminUser, tenants: list[TenantConfig], settings: Settings) -> str:
+    """Modal shown to regular users who have no active tenant configured."""
+    if admin_auth.is_privileged(user, settings):
+        return ""
+    if any(tenant.active for tenant in tenants):
+        return ""
+    return f"""
+    <div id="setup-modal-backdrop"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onclick="if(event.target===this)document.getElementById('setup-modal-backdrop').classList.add('hidden')">
+      <div class="relative w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
+        <button type="button"
+          onclick="document.getElementById('setup-modal-backdrop').classList.add('hidden')"
+          class="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+          <i class="ph ph-x text-lg"></i>
+        </button>
+        <div class="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#deff96]">
+          <i class="ph ph-plug text-3xl text-slate-900"></i>
+        </div>
+        <h2 class="text-xl font-bold text-slate-950">{t("DASHBOARD.SETUP_MODAL_TITLE")}</h2>
+        <p class="mt-2 text-sm leading-relaxed text-slate-500">{t("DASHBOARD.SETUP_MODAL_BODY")}</p>
+        <div class="mt-6 flex flex-col gap-3 sm:flex-row">
+          <a href="/admin-ui/tenants/new"
+            class="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800">
+            <i class="ph ph-plug text-sm"></i>
+            {t("DASHBOARD.SETUP_MODAL_BUTTON")}
+          </a>
+          <button type="button"
+            onclick="document.getElementById('setup-modal-backdrop').classList.add('hidden')"
+            class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            {t("DASHBOARD.SETUP_MODAL_DISMISS")}
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+
+
 def no_tenants_cta(user: admin_auth.AdminUser, tenants: list[TenantConfig], settings: Settings) -> str:
     if tenants or not can_write_tenants(user, settings):
         return ""
@@ -1378,10 +1449,14 @@ def tenant_form(
     saved: bool = False,
     message: str | None = None,
     warn: str | None = None,
+    activate_conflict: str | None = None,
 ) -> str:
     tt_webhook = external_api_url(settings, f"/webhooks/ticket-tailor/{tenant.tenant_id}")
+    is_inactive = not is_new and not tenant.active
     notice = ""
-    if saved and warn == "webhook_failed":
+    if activate_conflict:
+        notice = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-warning"></i> {t("TENANTS.NOTICE_ACTIVATE_CONFLICT")}</p>'
+    elif saved and warn == "webhook_failed":
         notice = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-warning"></i> {t("TENANTS.NOTICE_WEBHOOK_FAILED")}</p>'
     elif saved:
         notice = f'<p class="notice-ok mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-check-circle"></i> {t("TENANTS.NOTICE_SAVED")}</p>'
@@ -1389,11 +1464,18 @@ def tenant_form(
         notice = f'<p class="notice-ok mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-check-circle"></i> {e(message.replace("_", " ").capitalize())}.</p>'
     delete_action = ""
     if not is_new and can_write_tenants(user, settings):
-        delete_action = f"""
-        <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/delete">
-          <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">{t("TENANTS.FORM_BUTTON_DEACTIVATE")}</button>
-        </form>
-        """
+        if is_inactive:
+            delete_action = f"""
+            <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/activate">
+              <button type="submit" class="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"><i class="ph ph-check-circle text-base"></i>{t("TENANTS.FORM_BUTTON_ACTIVATE")}</button>
+            </form>
+            """
+        else:
+            delete_action = f"""
+            <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/delete">
+              <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">{t("TENANTS.FORM_BUTTON_DEACTIVATE")}</button>
+            </form>
+            """
     hidden_tenant_id = (
         f'<input type="hidden" name="tenant_id" value="{e(tenant.tenant_id)}">'
         if not is_new
@@ -1440,13 +1522,18 @@ def tenant_form(
         """
     save_label = t("TENANTS.FORM_BUTTON_CREATE") if is_new else t("TENANTS.FORM_BUTTON_SAVE")
     page_title = t("TENANTS.FORM_TITLE_NEW") if is_new else f"{t('TENANTS.FORM_TITLE_EDIT')} {e(tenant.name or tenant.tenant_id)}"
+    inactive_banner = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-lock text-base"></i>{t("TENANTS.NOTICE_INACTIVE")}</p>' if is_inactive else ""
+    form_fieldset_open = '<fieldset disabled class="contents">' if is_inactive else ""
+    form_fieldset_close = "</fieldset>" if is_inactive else ""
     return f"""
     <section class="mb-6">
       <h1 class="text-2xl font-semibold leading-8 text-slate-950">{page_title}</h1>
     </section>
+    {inactive_banner}
     {notice}
     <form id="tenant-form" method="post" action="/admin-ui/tenants/save" autocomplete="off" class="mx-auto grid max-w-6xl min-w-0 grid-cols-1 gap-4">
       {hidden_tenant_id}
+      {form_fieldset_open}
 
       <!-- Tenant section -->
       <div class="grid grid-cols-1 gap-6 rounded-xl border border-slate-100 bg-white p-6 shadow-nicky md:grid-cols-3">
@@ -1525,16 +1612,17 @@ def tenant_form(
           {webhook_block}
         </div>
       </div>
-
-      <!-- Form actions -->
-      <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
-        <div>{delete_action}</div>
-        <div class="flex gap-3">
-          <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{t("TENANTS.FORM_BUTTON_BACK")}</a>
-          <button id="save-tenant-button" class="inline-flex h-10 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" disabled>{save_label}</button>
-        </div>
-      </div>
+      {form_fieldset_close}
     </form>
+
+    <!-- Form actions — outside the main form to avoid nested-form HTML violation -->
+    <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+      <div>{delete_action}</div>
+      <div class="flex gap-3">
+        <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{t("TENANTS.FORM_BUTTON_BACK")}</a>
+        {"" if is_inactive else f'<button id="save-tenant-button" form="tenant-form" class="inline-flex h-10 items-center justify-center rounded-lg bg-black px-5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-white" type="submit" disabled>{save_label}</button>'}
+      </div>
+    </div>
     <script>
       const tenantForm = document.querySelector('form[action="/admin-ui/tenants/save"]');
       const nameInput = document.querySelector('input[name="name"]');

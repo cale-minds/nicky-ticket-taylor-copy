@@ -54,7 +54,11 @@
     "METRIC_ALL_TIME": "aller tijden",
     "NO_TENANTS_CTA_TITLE": "Geen Tenants geconfigureerd",
     "NO_TENANTS_CTA_HINT": "Koppel een Ticket Tailor-account om te beginnen.",
-    "NO_TENANTS_CTA_BUTTON": "Eerste Tenant toevoegen"
+    "NO_TENANTS_CTA_BUTTON": "Eerste Tenant toevoegen",
+    "SETUP_MODAL_TITLE": "Begin met Nicky",
+    "SETUP_MODAL_BODY": "Je hebt nog geen actieve tenant geconfigureerd. Stel je Ticket Tailor-verbinding in om offline betalingen te verwerken.",
+    "SETUP_MODAL_BUTTON": "Mijn account configureren",
+    "SETUP_MODAL_DISMISS": "Misschien later"
   },
   "TENANTS": {
     "TITLE": "Klantverbindingen",
@@ -97,9 +101,12 @@
     "FORM_BUTTON_SAVE": "Wijzigingen opslaan",
     "FORM_BUTTON_BACK": "Terug naar Tenants",
     "FORM_BUTTON_DEACTIVATE": "Tenant deactiveren",
+    "FORM_BUTTON_ACTIVATE": "Tenant activeren",
     "FORM_WEBHOOK_TITLE": "Ticket Tailor WebHook",
     "FORM_WEBHOOK_HINT": "Kopieer deze microservice WebHook-URL en configureer deze in Ticket Tailor via Instellingen > API > WebHook.",
     "NOTICE_SAVED": "Tenant opgeslagen.",
+    "NOTICE_INACTIVE": "Deze tenant is inactief. Activeer hem om wijzigingen aan te brengen.",
+    "NOTICE_ACTIVATE_CONFLICT": "Kan deze tenant niet activeren — een andere actieve tenant gebruikt al dezelfde API-sleutel. Deactiveer eerst de conflicterende tenant.",
     "NOTICE_WEBHOOK_FAILED": "Tenant opgeslagen, maar registratie van de Nicky WebHook is mislukt — probeer het later opnieuw.",
     "VALIDATION_VALIDATING": "Valideren...",
     "VALIDATION_NICKY_OK": "Nicky API key gevalideerd.",

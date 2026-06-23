@@ -54,7 +54,11 @@
     "METRIC_ALL_TIME": "desde sempre",
     "NO_TENANTS_CTA_TITLE": "Nenhum tenant configurado",
     "NO_TENANTS_CTA_HINT": "Conecte uma conta do Ticket Tailor para começar.",
-    "NO_TENANTS_CTA_BUTTON": "Adicionar primeiro tenant"
+    "NO_TENANTS_CTA_BUTTON": "Adicionar primeiro tenant",
+    "SETUP_MODAL_TITLE": "Comece com o Nicky",
+    "SETUP_MODAL_BODY": "Você ainda não tem um tenant ativo configurado. Configure sua conexão com o Ticket Tailor para começar a processar pagamentos offline.",
+    "SETUP_MODAL_BUTTON": "Configurar minha conta",
+    "SETUP_MODAL_DISMISS": "Talvez depois"
   },
   "TENANTS": {
     "TITLE": "Conexões de clientes",
@@ -97,9 +101,12 @@
     "FORM_BUTTON_SAVE": "Salvar alterações",
     "FORM_BUTTON_BACK": "Voltar para tenants",
     "FORM_BUTTON_DEACTIVATE": "Desativar tenant",
+    "FORM_BUTTON_ACTIVATE": "Ativar tenant",
     "FORM_WEBHOOK_TITLE": "Webhook do Ticket Tailor",
     "FORM_WEBHOOK_HINT": "Copie esta URL de webhook do microsserviço e configure-a no Ticket Tailor em Configurações > API > WebHook.",
     "NOTICE_SAVED": "Tenant salvo.",
+    "NOTICE_INACTIVE": "Este tenant está inativo. Ative-o para fazer alterações.",
+    "NOTICE_ACTIVATE_CONFLICT": "Não é possível ativar este tenant — outro tenant ativo já está usando a mesma chave de API. Desative o tenant em conflito primeiro.",
     "NOTICE_WEBHOOK_FAILED": "Tenant salvo, mas o registro do webhook Nicky falhou — tente novamente mais tarde.",
     "VALIDATION_VALIDATING": "Validando...",
     "VALIDATION_NICKY_OK": "Chave de API Nicky validada.",

@@ -209,6 +209,14 @@ class Database:
                 .values(active=False, updated_at=func.now())
             )
 
+    def activate_tenant(self, tenant_id: str) -> None:
+        with self._begin() as conn:
+            conn.execute(
+                tenants.update()
+                .where(tenants.c.tenant_id == tenant_id)
+                .values(active=True, updated_at=func.now())
+            )
+
     def find_active_tenant_by_api_key(
         self,
         column: str,

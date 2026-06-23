@@ -54,7 +54,11 @@
     "METRIC_ALL_TIME": "累计",
     "NO_TENANTS_CTA_TITLE": "暂无已配置的租户",
     "NO_TENANTS_CTA_HINT": "连接一个 Ticket Tailor 账户以开始使用。",
-    "NO_TENANTS_CTA_BUTTON": "添加第一个租户"
+    "NO_TENANTS_CTA_BUTTON": "添加第一个租户",
+    "SETUP_MODAL_TITLE": "开始使用 Nicky",
+    "SETUP_MODAL_BODY": "您尚未配置活跃的租户。请设置您的 Ticket Tailor 连接以开始处理线下支付。",
+    "SETUP_MODAL_BUTTON": "配置我的账户",
+    "SETUP_MODAL_DISMISS": "稍后再说"
   },
   "TENANTS": {
     "TITLE": "客户连接",
@@ -97,9 +101,12 @@
     "FORM_BUTTON_SAVE": "保存更改",
     "FORM_BUTTON_BACK": "返回租户列表",
     "FORM_BUTTON_DEACTIVATE": "停用租户",
+    "FORM_BUTTON_ACTIVATE": "启用租户",
     "FORM_WEBHOOK_TITLE": "Ticket Tailor WebHook",
     "FORM_WEBHOOK_HINT": "复制此微服务 WebHook URL 并在 Ticket Tailor 的设置 > API > WebHook 中进行配置。",
     "NOTICE_SAVED": "租户已保存。",
+    "NOTICE_INACTIVE": "此租户已停用。请启用后再进行更改。",
+    "NOTICE_ACTIVATE_CONFLICT": "无法启用此租户 — 另一个活跃租户已使用相同的 API 密钥。请先停用冲突的租户。",
     "NOTICE_WEBHOOK_FAILED": "租户已保存，但 Nicky WebHook 注册失败 — 请稍后重试。",
     "VALIDATION_VALIDATING": "验证中...",
     "VALIDATION_NICKY_OK": "Nicky API key 验证成功。",

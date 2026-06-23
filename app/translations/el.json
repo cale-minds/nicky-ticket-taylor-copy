@@ -54,7 +54,11 @@
     "METRIC_ALL_TIME": "όλων των εποχών",
     "NO_TENANTS_CTA_TITLE": "Δεν έχουν ρυθμιστεί Tenants",
     "NO_TENANTS_CTA_HINT": "Συνδέστε έναν λογαριασμό Ticket Tailor για να ξεκινήσετε.",
-    "NO_TENANTS_CTA_BUTTON": "Προσθήκη πρώτου Tenant"
+    "NO_TENANTS_CTA_BUTTON": "Προσθήκη πρώτου Tenant",
+    "SETUP_MODAL_TITLE": "Ξεκινήστε με το Nicky",
+    "SETUP_MODAL_BODY": "Δεν έχετε ακόμη ρυθμίσει έναν ενεργό Tenant. Ρυθμίστε τη σύνδεσή σας με το Ticket Tailor για να ξεκινήσετε την επεξεργασία εκτός σύνδεσης πληρωμών.",
+    "SETUP_MODAL_BUTTON": "Ρύθμιση λογαριασμού",
+    "SETUP_MODAL_DISMISS": "Ίσως αργότερα"
   },
   "TENANTS": {
     "TITLE": "Συνδέσεις πελατών",
@@ -97,9 +101,12 @@
     "FORM_BUTTON_SAVE": "Αποθήκευση αλλαγών",
     "FORM_BUTTON_BACK": "Επιστροφή στους Tenants",
     "FORM_BUTTON_DEACTIVATE": "Απενεργοποίηση Tenant",
+    "FORM_BUTTON_ACTIVATE": "Ενεργοποίηση Tenant",
     "FORM_WEBHOOK_TITLE": "WebHook Ticket Tailor",
     "FORM_WEBHOOK_HINT": "Αντιγράψτε αυτό το URL WebHook microservice και ρυθμίστε το στο Ticket Tailor μέσω Ρυθμίσεις > API > WebHook.",
     "NOTICE_SAVED": "Ο Tenant αποθηκεύτηκε.",
+    "NOTICE_INACTIVE": "Αυτός ο tenant είναι ανενεργός. Ενεργοποιήστε τον για να κάνετε αλλαγές.",
+    "NOTICE_ACTIVATE_CONFLICT": "Δεν είναι δυνατή η ενεργοποίηση αυτού του tenant — ένας άλλος ενεργός tenant χρησιμοποιεί ήδη το ίδιο κλειδί API. Απενεργοποιήστε πρώτα τον tenant που προκαλεί σύγκρουση.",
     "NOTICE_WEBHOOK_FAILED": "Ο Tenant αποθηκεύτηκε, αλλά η καταχώριση WebHook Nicky απέτυχε — δοκιμάστε ξανά αργότερα.",
     "VALIDATION_VALIDATING": "Επαλήθευση...",
     "VALIDATION_NICKY_OK": "Το API key Nicky επαληθεύτηκε.",
