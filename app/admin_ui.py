@@ -1616,7 +1616,7 @@ def tenant_form(
     </form>
 
     <!-- Form actions — outside the main form to avoid nested-form HTML violation -->
-    <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+    <div class="mx-auto w-full max-w-6xl flex flex-wrap items-center justify-between gap-3 pt-2">
       <div>{delete_action}</div>
       <div class="flex gap-3">
         <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/tenants">{t("TENANTS.FORM_BUTTON_BACK")}</a>

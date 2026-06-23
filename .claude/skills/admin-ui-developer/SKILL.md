@@ -29,7 +29,11 @@ The Admin UI is a FastAPI router that returns `HTMLResponse` with HTML generated
 
 8. **Logout** — use `window.location.replace()`, never `window.location.assign()` (prevents back-navigation).
 
-9. **Test in the browser** — after any visual change, restart the server via `start-local-auth0-compat.bat` and verify at `http://localhost:4200/admin-ui/`.
+9. **Test in the browser — mandatory after every visual change.** The standard dev workflow is:
+   - Restart the server: `Stop-Process -Name "python" -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Start-Process -FilePath "D:\work\nicky-ticket-tailor-service\start-local-auth0-compat.bat" -WindowStyle Hidden; Start-Sleep -Seconds 3`
+   - Confirm it's up: `Invoke-WebRequest -Uri "http://localhost:4200/admin-ui" -UseBasicParsing -TimeoutSec 5`
+   - Navigate and screenshot using the **Claude in Chrome** MCP tools (`mcp__Claude_in_Chrome__navigate`, `mcp__Claude_in_Chrome__browser_batch` with `computer` screenshot actions). The Chrome extension ID is `443d1dec-5fec-4a0f-ad8d-3c19dc868824`.
+   - Always show the screenshot to the user as proof — never claim a visual change works without a screenshot from the running app.
 
 ## i18n
 
