@@ -26,6 +26,7 @@ class TenantConfig:
     nicky_default_blockchain_asset_id: str
     nicky_receiver_short_id: str
     nicky_webhook_token: str
+    nicky_webhook_id: str
     nicky_webhook_type: int
     nicky_send_notification: bool
     owner_auth_subject: str = ""
@@ -74,6 +75,7 @@ def tenant_from_settings(settings: Settings, tenant_id: str | None = None) -> Te
         nicky_default_blockchain_asset_id=settings.nicky_default_blockchain_asset_id,
         nicky_receiver_short_id=settings.nicky_receiver_short_id,
         nicky_webhook_token=settings.nicky_webhook_token,
+        nicky_webhook_id="",
         nicky_webhook_type=NICKY_WEBHOOK_TYPE,
         nicky_send_notification=True,
         owner_auth_subject="",
@@ -96,6 +98,7 @@ def tenant_from_row(row: Any) -> TenantConfig:
         nicky_default_blockchain_asset_id=str(row["nicky_default_blockchain_asset_id"] or ""),
         nicky_receiver_short_id=str(row["nicky_receiver_short_id"] or ""),
         nicky_webhook_token=str(row["nicky_webhook_token"] or ""),
+        nicky_webhook_id=str(row.get("nicky_webhook_id") or ""),
         nicky_webhook_type=NICKY_WEBHOOK_TYPE,
         nicky_send_notification=True,
         owner_auth_subject=str(row["owner_auth_subject"] or ""),

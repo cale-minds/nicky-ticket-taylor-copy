@@ -14,7 +14,7 @@ if not defined AUTH0_CLIENT_ID set "AUTH0_CLIENT_ID=SqrJq2fxJ6adrOFaR24oh9COF4vZ
 if not defined AUTH0_AUDIENCE set "AUTH0_AUDIENCE=https://nicky-tech.azurewebsites.net"
 if not defined AUTH0_CLIENT_SECRET set "AUTH0_CLIENT_SECRET="
 if not defined ADMIN_ALLOWED_ROLES set "ADMIN_ALLOWED_ROLES=Admin"
-if not defined NICKY_API_BASE_URL set "NICKY_API_BASE_URL=https://api-public.dev.pay.nicky.me"
+if not defined NICKY_API_BASE_URL set "NICKY_API_BASE_URL=https://api-public.pay.nicky.me"
 
 if not defined FASTAPI_EXE (
   if exist "%ROOT%.venv\Scripts\python.exe" (

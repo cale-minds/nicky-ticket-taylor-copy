@@ -353,6 +353,12 @@ async def build_tenant_config(
     )
 
     webhook_token = base.nicky_webhook_token or secrets.token_urlsafe(24)
+    if admin_auth.is_admin(user, settings):
+        resolved_owner_subject = (
+            base.owner_auth_subject or (db.find_user_subject_by_email(nicky_user_email) or "")
+        )
+    else:
+        resolved_owner_subject = user.subject
     return replace(
         base,
         tenant_id=normalized_tenant_id,
@@ -369,7 +375,7 @@ async def build_tenant_config(
         nicky_webhook_token=webhook_token,
         nicky_webhook_type=NICKY_WEBHOOK_TYPE,
         nicky_send_notification=True,
-        owner_auth_subject=base.owner_auth_subject if admin_auth.is_admin(user, settings) else user.subject,
+        owner_auth_subject=resolved_owner_subject,
     )
 
 
@@ -499,7 +505,24 @@ async def handle_ticket_tailor_webhook(
     request: Request,
     tickettailor_webhook_signature: str | None,
 ) -> dict[str, Any]:
-    tenant = get_tenant_or_404(tenant_id, require_active=True)
+    tenant = get_tenant_or_404(tenant_id)
+    if not tenant.active:
+        raw_body = await request.body()
+        try:
+            body: Any = json.loads(raw_body)
+        except Exception:
+            body = {}
+        event_id = str(body.get("id") or body.get("event_id") or secrets.token_hex(8))
+        event_type = str(body.get("type") or body.get("event_type") or "unknown")
+        if db.insert_webhook_event(
+            tenant_id=tenant.tenant_id,
+            source="ticket_tailor",
+            event_id=event_id,
+            event_type=event_type,
+            raw_body=raw_body,
+        ):
+            db.mark_webhook_event(tenant.tenant_id, "ticket_tailor", event_id, "ignored", "tenant_disabled")
+        return {"status": "ignored"}
     raw_body, body = await parse_json_body(request)
     try:
         verify_ticket_tailor_signature(
@@ -546,7 +569,24 @@ async def handle_nicky_webhook(
     token: str | None,
     x_nicky_webhook_token: str | None,
 ) -> dict[str, Any]:
-    tenant = get_tenant_or_404(tenant_id, require_active=True)
+    tenant = get_tenant_or_404(tenant_id)
+    if not tenant.active:
+        raw_body = await request.body()
+        try:
+            body: Any = json.loads(raw_body)
+        except Exception:
+            body = {}
+        event_id = str(body.get("id") or body.get("paymentRequestId") or secrets.token_hex(8))
+        event_type = str(body.get("type") or body.get("status") or "unknown")
+        if db.insert_webhook_event(
+            tenant_id=tenant.tenant_id,
+            source="nicky",
+            event_id=event_id,
+            event_type=event_type,
+            raw_body=raw_body,
+        ):
+            db.mark_webhook_event(tenant.tenant_id, "nicky", event_id, "ignored", "tenant_disabled")
+        return {"status": "ignored"}
     require_nicky_token(
         tenant,
         token=token,
@@ -628,8 +668,9 @@ async def admin_upsert_tenant(
     payload: TenantUpsertRequest, user: admin_auth.AdminUser = Depends(require_admin)
 ) -> dict[str, Any]:
     tenant = await build_tenant_config(payload.tenant_id, payload, user)
+    webhook_result = await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant))
+    tenant = replace(tenant, nicky_webhook_id=webhook_result.get("webhook_id", ""))
     db.upsert_tenant(tenant)
-    await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant))
     return tenant_to_safe_dict(tenant)
 
 
@@ -649,8 +690,9 @@ async def admin_update_tenant(
 ) -> dict[str, Any]:
     scoped_tenant_id(user, normalize_tenant_id(tenant_id))
     tenant = await build_tenant_config(tenant_id, payload, user)
+    webhook_result = await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant))
+    tenant = replace(tenant, nicky_webhook_id=webhook_result.get("webhook_id", ""))
     db.upsert_tenant(tenant)
-    await nicky_client.create_webhook(tenant, nicky_webhook_url(tenant))
     return tenant_to_safe_dict(tenant)
 
 
@@ -662,6 +704,11 @@ async def admin_delete_tenant(
     require_writer(user)
     scoped = scoped_tenant_id(user, normalize_tenant_id(tenant_id))
     tenant = get_tenant_or_404(scoped or tenant_id)
+    if tenant.nicky_webhook_id:
+        try:
+            await nicky_client.delete_webhook(tenant.nicky_api_key, tenant.nicky_webhook_id)
+        except NickyApiError:
+            logger.warning("delete_webhook.failed tenant_id=%s webhook_id=%s", tenant.tenant_id, tenant.nicky_webhook_id)
     db.deactivate_tenant(tenant.tenant_id)
     return {"status": "deactivated", "tenant_id": tenant.tenant_id}
 

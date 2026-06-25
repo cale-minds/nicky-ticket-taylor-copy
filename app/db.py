@@ -14,7 +14,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.engine import Connection, CursorResult, Engine, RowMapping
 
 from app.config import sqlite_url_from_path
-from app.db_models import integration_orders, order_logs, tenants, webhook_events
+from app.db_models import integration_orders, order_logs, tenants, users, webhook_events
 from app.tenants import TenantConfig, tenant_from_row
 
 
@@ -167,6 +167,38 @@ class Database:
         with self.engine.begin() as connection:
             yield connection
 
+    def upsert_user(self, auth_subject: str, email: str, name: str = "") -> None:
+        if not auth_subject:
+            return
+        with self._begin() as conn:
+            exists = conn.execute(
+                select(users.c.auth_subject).where(users.c.auth_subject == auth_subject)
+            ).first()
+            if exists:
+                conn.execute(
+                    users.update()
+                    .where(users.c.auth_subject == auth_subject)
+                    .values(email=email or "", name=name or "", updated_at=func.now())
+                )
+            else:
+                conn.execute(
+                    users.insert().values(
+                        auth_subject=auth_subject, email=email or "", name=name or ""
+                    )
+                )
+
+    def find_user_subject_by_email(self, email: str) -> str | None:
+        if not email:
+            return None
+        with self._begin() as conn:
+            row = conn.execute(
+                select(users.c.auth_subject)
+                .where(func.lower(users.c.email) == email.strip().lower())
+                .order_by(users.c.updated_at.desc())
+                .limit(1)
+            ).first()
+        return str(row[0]) if row else None
+
     def upsert_tenant(self, tenant: TenantConfig) -> None:
         values = {
             "tenant_id": tenant.tenant_id,
@@ -181,6 +213,7 @@ class Database:
             "nicky_default_blockchain_asset_id": tenant.nicky_default_blockchain_asset_id,
             "nicky_receiver_short_id": tenant.nicky_receiver_short_id,
             "nicky_webhook_token": tenant.nicky_webhook_token,
+            "nicky_webhook_id": tenant.nicky_webhook_id,
             "nicky_webhook_type": tenant.nicky_webhook_type,
             "nicky_send_notification": bool(tenant.nicky_send_notification),
             "owner_auth_subject": tenant.owner_auth_subject,
@@ -216,6 +249,28 @@ class Database:
                 .where(tenants.c.tenant_id == tenant_id)
                 .values(active=True, updated_at=func.now())
             )
+
+    def find_active_tenant_by_owner(self, owner_auth_subject: str) -> TenantConfig | None:
+        if not owner_auth_subject:
+            return None
+        with self._begin() as conn:
+            row = conn.execute(
+                select(tenants)
+                .where(tenants.c.owner_auth_subject == owner_auth_subject, tenants.c.active == sa.true())
+                .limit(1)
+            ).mappings().first()
+        return tenant_from_row(record(row)) if row else None
+
+    def find_active_tenant_by_user_email(self, email: str) -> TenantConfig | None:
+        if not email:
+            return None
+        with self._begin() as conn:
+            row = conn.execute(
+                select(tenants)
+                .where(tenants.c.nicky_user_email == email, tenants.c.active == sa.true())
+                .limit(1)
+            ).mappings().first()
+        return tenant_from_row(record(row)) if row else None
 
     def find_active_tenant_by_api_key(
         self,

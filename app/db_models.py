@@ -21,6 +21,7 @@ tenants = sa.Table(
     sa.Column("nicky_default_blockchain_asset_id", sa.String(255), nullable=False, server_default=""),
     sa.Column("nicky_receiver_short_id", sa.String(255), nullable=False, server_default=""),
     sa.Column("nicky_webhook_token", sa.String(255), nullable=False, server_default=""),
+    sa.Column("nicky_webhook_id", sa.String(255), nullable=False, server_default=""),
     sa.Column("nicky_webhook_type", sa.Integer(), nullable=False, server_default="2"),
     sa.Column("nicky_send_notification", sa.Boolean(), nullable=False, server_default=sa.true()),
     sa.Column("owner_auth_subject", sa.String(255), nullable=False, server_default=""),
@@ -76,6 +77,19 @@ sa.Index(
     integration_orders.c.tenant_id,
     integration_orders.c.nicky_payment_request_id,
 )
+
+
+users = sa.Table(
+    "users",
+    metadata,
+    sa.Column("auth_subject", sa.String(255), primary_key=True),
+    sa.Column("email", sa.String(255), nullable=False, server_default=""),
+    sa.Column("name", sa.String(255), nullable=False, server_default=""),
+    sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+    sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+)
+
+sa.Index("idx_users_email", users.c.email)
 
 
 order_logs = sa.Table(

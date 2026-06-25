@@ -34,7 +34,8 @@
     "TENANT": "Tenant",
     "PAYLOAD": "Payload",
     "ROWS_PER_PAGE": "Rows per page",
-    "NO_RESULTS": "0 results"
+    "NO_RESULTS": "0 results",
+    "CANCEL": "Cancel"
   },
   "PROFILE": {
     "ADMIN": "Admin",
@@ -113,7 +114,8 @@
     "VALIDATION_TT_OK": "Ticket Tailor API key validated.",
     "VALIDATION_ERROR_NICKY_EMPTY": "Paste a Nicky API key first.",
     "VALIDATION_ERROR_TT_EMPTY": "Paste a Ticket Tailor API key first.",
-    "VALIDATION_FAILED": "Validation failed"
+    "VALIDATION_FAILED": "Validation failed",
+    "REPLACE_NOTICE": "Note: your current active tenant \"{{name}}\" ({{tenant_id}}) will be automatically deactivated and its Nicky webhook removed when you save this new tenant."
   },
   "ORDERS": {
     "TITLE": "Orders",

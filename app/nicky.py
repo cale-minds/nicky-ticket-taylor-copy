@@ -65,13 +65,44 @@ class NickyClient:
         if not tenant.nicky_api_key:
             raise ValueError("Nicky API key is required to create webhook")
 
-        return await self._request_json(
+        response = await self._request_json(
             "POST",
             "/api/public/WebHookApi/create",
             api_key=tenant.nicky_api_key,
             operation="create Nicky webhook",
             json={"webHookType": NICKY_WEBHOOK_TYPE, "url": url},
         )
+        webhook_id = self._extract_webhook_id(response)
+        return {"webhook_id": webhook_id, "raw": response}
+
+    async def delete_webhook(self, api_key: str, webhook_id: str) -> None:
+        if not api_key or not webhook_id:
+            return
+        await self._request_json(
+            "POST",
+            "/api/public/WebHookApi/delete",
+            api_key=api_key,
+            operation="delete Nicky webhook",
+            params={"id": webhook_id},
+        )
+
+    async def list_webhooks(self, api_key: str) -> list[dict[str, Any]]:
+        if not api_key:
+            return []
+        response = await self._request_json(
+            "GET",
+            "/api/public/WebHookApi/list",
+            api_key=api_key,
+            operation="list Nicky webhooks",
+        )
+        if isinstance(response, list):
+            return response
+        if isinstance(response, dict):
+            for key in ("data", "items", "webhooks", "webHooks"):
+                value = response.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
 
     async def test_status_change_webhook(self, tenant: TenantConfig) -> dict[str, Any]:
         if not tenant.nicky_api_key:
@@ -136,6 +167,10 @@ class NickyClient:
                 self._error_message(operation, response),
                 status_code=response.status_code,
             )
+
+        # Some endpoints (e.g. webhook delete) return 200 with an empty body.
+        if not response.content or not response.content.strip():
+            return None
 
         try:
             return response.json()
@@ -246,6 +281,16 @@ class NickyClient:
             return ""
         for key in ("email", "userEmail", "user_email"):
             value = user.get(key)
+            if value:
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _extract_webhook_id(payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("id", "Id", "webhookId", "webhook_id", "hookId", "webHookId"):
+            value = payload.get(key)
             if value:
                 return str(value)
         return ""

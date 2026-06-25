@@ -131,6 +131,15 @@ def create_admin_ui_router(
         admin_auth.assert_nonce(claims, expected_nonce)
         user = admin_auth.user_from_claims(claims, auth_method="auth0")
 
+        # Maintain the auth-subject <-> login-email directory so admins can later
+        # resolve a user's owner_auth_subject from the email they type.
+        if user.subject:
+            db.upsert_user(user.subject, user.email, user.name)
+            # Claim any active tenant created for this email by an admin (no owner yet).
+            orphan = db.find_active_tenant_by_user_email(user.email)
+            if orphan and not orphan.owner_auth_subject:
+                db.upsert_tenant(replace(orphan, owner_auth_subject=user.subject))
+
         return_to = admin_auth.consume_return_to(request, settings)
         admin_auth.clear_session(request)
         admin_auth.set_session_user(request, user)
@@ -289,11 +298,14 @@ def create_admin_ui_router(
             raise HTTPException(status_code=403, detail="Support access is read-only")
         tenant_id = "new-tenant" if admin_auth.is_admin(user, settings) else admin_auth.nicky_user_uuid(user)
         tenant = tenant_from_settings(settings, tenant_id)
+        existing_tenant: TenantConfig | None = None
+        if not admin_auth.is_admin(user, settings):
+            existing_tenant = db.find_active_tenant_by_owner(user.subject)
         return html_response(
             render(
                 request,
                 t("TENANTS.FORM_TITLE_NEW"),
-                tenant_form(tenant, is_new=True, settings=settings, user=user),
+                tenant_form(tenant, is_new=True, settings=settings, user=user, replace_notice=existing_tenant),
                 current_path="/admin-ui/tenants",
                 settings=settings,
             )
@@ -401,6 +413,40 @@ def create_admin_ui_router(
         ticket_tailor_api_key = form_secret(
             form, "ticket_tailor_api_key", base.ticket_tailor_api_key
         )
+
+        # --- Resolve the owner subject from the users directory (admin flow) ---
+        is_admin_user = admin_auth.is_admin(user, settings)
+        if is_admin_user:
+            resolved_owner_subject = (
+                base.owner_auth_subject
+                or (db.find_user_subject_by_email(nicky_user_email) or "")
+            )
+        else:
+            resolved_owner_subject = user.subject
+
+        # --- Auto-deactivate existing active tenant for this user/email ---
+        is_new_tenant = existing is None
+        if is_new_tenant:
+            conflict_tenant: TenantConfig | None = None
+            if resolved_owner_subject:
+                conflict_tenant = db.find_active_tenant_by_owner(resolved_owner_subject)
+            if not conflict_tenant and is_admin_user and nicky_user_email:
+                conflict_tenant = db.find_active_tenant_by_user_email(nicky_user_email)
+            if not conflict_tenant and not is_admin_user:
+                conflict_tenant = db.find_active_tenant_by_owner(user.subject)
+            if conflict_tenant and conflict_tenant.tenant_id != tenant_id:
+                try:
+                    old_url_pattern = f"/webhooks/nicky/{conflict_tenant.tenant_id}"
+                    webhooks = await nicky_client.list_webhooks(api_key)
+                    for wh in webhooks:
+                        wh_url = str(wh.get("url") or "")
+                        wh_id = str(wh.get("id") or "")
+                        if old_url_pattern in wh_url and wh_id:
+                            await nicky_client.delete_webhook(api_key, wh_id)
+                except NickyApiError:
+                    pass
+                db.deactivate_tenant(conflict_tenant.tenant_id)
+
         ensure_unique_active_api_keys(
             db,
             nicky_api_key=api_key,
@@ -424,12 +470,15 @@ def create_admin_ui_router(
             nicky_webhook_token=base.nicky_webhook_token or secrets.token_urlsafe(24),
             nicky_webhook_type=NICKY_WEBHOOK_TYPE,
             nicky_send_notification=True,
-            owner_auth_subject=base.owner_auth_subject if admin_auth.is_admin(user, settings) else user.subject,
+            owner_auth_subject=resolved_owner_subject,
         )
         db.upsert_tenant(tenant)
         if nicky_key_changed:
             try:
-                await nicky_client.create_webhook(tenant, build_nicky_webhook_url(settings, tenant))
+                webhook_result = await nicky_client.create_webhook(tenant, build_nicky_webhook_url(settings, tenant))
+                webhook_id = webhook_result.get("webhook_id", "")
+                if webhook_id:
+                    db.upsert_tenant(replace(tenant, nicky_webhook_id=webhook_id))
             except NickyApiError:
                 return RedirectResponse(
                     f"/admin-ui/tenants/{urllib.parse.quote(tenant.tenant_id)}/edit?saved=1&warn=webhook_failed",
@@ -475,6 +524,11 @@ def create_admin_ui_router(
             raise HTTPException(status_code=403, detail="Support access is read-only")
         tenant = get_tenant_or_404(db, tenant_id)
         require_tenant_visible(user, settings, tenant)
+        if tenant.nicky_webhook_id:
+            try:
+                await nicky_client.delete_webhook(tenant.nicky_api_key, tenant.nicky_webhook_id)
+            except NickyApiError:
+                pass
         db.deactivate_tenant(tenant.tenant_id)
         return RedirectResponse("/admin-ui/tenants", status_code=303)
 
@@ -1450,6 +1504,7 @@ def tenant_form(
     message: str | None = None,
     warn: str | None = None,
     activate_conflict: str | None = None,
+    replace_notice: TenantConfig | None = None,
 ) -> str:
     tt_webhook = external_api_url(settings, f"/webhooks/ticket-tailor/{tenant.tenant_id}")
     is_inactive = not is_new and not tenant.active
@@ -1460,6 +1515,8 @@ def tenant_form(
         notice = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-warning"></i> {t("TENANTS.NOTICE_WEBHOOK_FAILED")}</p>'
     elif saved:
         notice = f'<p class="notice-ok mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-check-circle"></i> {t("TENANTS.NOTICE_SAVED")}</p>'
+    elif replace_notice:
+        notice = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-info"></i> {t("TENANTS.REPLACE_NOTICE", name=e(replace_notice.name), tenant_id=e(replace_notice.tenant_id))}</p>'
     elif message:
         notice = f'<p class="notice-ok mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-check-circle"></i> {e(message.replace("_", " ").capitalize())}.</p>'
     delete_action = ""

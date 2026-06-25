@@ -34,7 +34,8 @@
     "TENANT": "Tenant",
     "PAYLOAD": "Payload",
     "ROWS_PER_PAGE": "Linhas por página",
-    "NO_RESULTS": "0 resultados"
+    "NO_RESULTS": "0 resultados",
+    "CANCEL": "Cancelar"
   },
   "PROFILE": {
     "ADMIN": "Admin",
@@ -113,7 +114,8 @@
     "VALIDATION_TT_OK": "Chave de API do Ticket Tailor validada.",
     "VALIDATION_ERROR_NICKY_EMPTY": "Cole uma chave de API Nicky primeiro.",
     "VALIDATION_ERROR_TT_EMPTY": "Cole uma chave de API do Ticket Tailor primeiro.",
-    "VALIDATION_FAILED": "Validação falhou"
+    "VALIDATION_FAILED": "Validação falhou",
+    "REPLACE_NOTICE": "Atenção: seu tenant ativo atual \"{{name}}\" ({{tenant_id}}) será desativado automaticamente e seu webhook Nicky removido ao salvar este novo tenant."
   },
   "ORDERS": {
     "TITLE": "Pedidos",
