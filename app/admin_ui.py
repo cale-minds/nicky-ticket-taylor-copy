@@ -332,7 +332,6 @@ def create_admin_ui_router(
                     saved=request.query_params.get("saved") == "1",
                     message=request.query_params.get("message"),
                     warn=request.query_params.get("warn"),
-                    activate_conflict=request.query_params.get("activate_conflict"),
                 ),
                 current_path="/admin-ui/tenants",
                 settings=settings,
@@ -530,37 +529,6 @@ def create_admin_ui_router(
             except NickyApiError:
                 pass
         db.deactivate_tenant(tenant.tenant_id)
-        return RedirectResponse("/admin-ui/tenants", status_code=303)
-
-    @router.post("/admin-ui/tenants/{tenant_id}/activate")
-    async def activate_tenant(
-        tenant_id: str, user: admin_auth.AdminUser = Depends(require_admin_web)
-    ):
-        if not can_write_tenants(user, settings):
-            raise HTTPException(status_code=403, detail="Support access is read-only")
-        tenant = get_tenant_or_404(db, tenant_id)
-        require_tenant_visible(user, settings, tenant)
-        conflict_nicky = (
-            db.find_active_tenant_by_api_key(
-                "nicky_api_key", tenant.nicky_api_key or "", exclude_tenant_id=tenant_id
-            )
-            if tenant.nicky_api_key
-            else None
-        )
-        conflict_tt = (
-            db.find_active_tenant_by_api_key(
-                "ticket_tailor_api_key", tenant.ticket_tailor_api_key or "", exclude_tenant_id=tenant_id
-            )
-            if tenant.ticket_tailor_api_key
-            else None
-        )
-        if conflict_nicky or conflict_tt:
-            conflict_id = (conflict_nicky or conflict_tt).tenant_id
-            return RedirectResponse(
-                f"/admin-ui/tenants/{urllib.parse.quote(tenant_id)}/edit?activate_conflict={urllib.parse.quote(conflict_id)}",
-                status_code=303,
-            )
-        db.activate_tenant(tenant.tenant_id)
         return RedirectResponse("/admin-ui/tenants", status_code=303)
 
     @router.get("/admin-ui/orders", response_class=HTMLResponse)
@@ -1503,15 +1471,12 @@ def tenant_form(
     saved: bool = False,
     message: str | None = None,
     warn: str | None = None,
-    activate_conflict: str | None = None,
     replace_notice: TenantConfig | None = None,
 ) -> str:
     tt_webhook = external_api_url(settings, f"/webhooks/ticket-tailor/{tenant.tenant_id}")
     is_inactive = not is_new and not tenant.active
     notice = ""
-    if activate_conflict:
-        notice = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-warning"></i> {t("TENANTS.NOTICE_ACTIVATE_CONFLICT")}</p>'
-    elif saved and warn == "webhook_failed":
+    if saved and warn == "webhook_failed":
         notice = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-warning"></i> {t("TENANTS.NOTICE_WEBHOOK_FAILED")}</p>'
     elif saved:
         notice = f'<p class="notice-ok mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-check-circle"></i> {t("TENANTS.NOTICE_SAVED")}</p>'
@@ -1520,19 +1485,12 @@ def tenant_form(
     elif message:
         notice = f'<p class="notice-ok mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-check-circle"></i> {e(message.replace("_", " ").capitalize())}.</p>'
     delete_action = ""
-    if not is_new and can_write_tenants(user, settings):
-        if is_inactive:
-            delete_action = f"""
-            <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/activate">
-              <button type="submit" class="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"><i class="ph ph-check-circle text-base"></i>{t("TENANTS.FORM_BUTTON_ACTIVATE")}</button>
-            </form>
-            """
-        else:
-            delete_action = f"""
-            <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/delete">
-              <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">{t("TENANTS.FORM_BUTTON_DEACTIVATE")}</button>
-            </form>
-            """
+    if not is_new and not is_inactive and can_write_tenants(user, settings):
+        delete_action = f"""
+        <form method="post" action="/admin-ui/tenants/{u(tenant.tenant_id)}/delete">
+          <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">{t("TENANTS.FORM_BUTTON_DEACTIVATE")}</button>
+        </form>
+        """
     hidden_tenant_id = (
         f'<input type="hidden" name="tenant_id" value="{e(tenant.tenant_id)}">'
         if not is_new
@@ -1577,6 +1535,59 @@ def tenant_form(
           <p id="ticket-tailor-webhook-copy-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
         </div>
         """
+    def _locked_api_key_field(label: str, configured: bool) -> str:
+        masked = "•" * 24 if configured else ""
+        return f"""
+          <div>
+            <label class="block text-sm font-semibold text-slate-950">{label}</label>
+            <div class="mt-2 flex min-w-0 overflow-hidden rounded-lg border border-slate-100 bg-slate-50 shadow-sm">
+              <input class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm tracking-widest text-slate-400" type="text" value="{masked}" disabled>
+              <span class="inline-flex h-11 w-11 shrink-0 items-center justify-center border-l border-slate-100 text-slate-400"><i class="ph ph-lock"></i></span>
+            </div>
+            <p class="mt-2 min-h-5 text-sm text-slate-400">{t("TENANTS.FORM_API_KEY_LOCKED")}</p>
+          </div>
+        """
+
+    nicky_api_field = (
+        _locked_api_key_field(t("TENANTS.FORM_LABEL_API_KEY"), bool(tenant.nicky_api_key))
+        if not is_new
+        else f"""
+          <div>
+            <label for="nicky-api-key" class="block text-sm font-semibold text-slate-950">
+              {t("TENANTS.FORM_LABEL_API_KEY")}
+            </label>
+            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
+                <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="new-password">
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="{t("COMMON.SHOW")}" title="{t("COMMON.SHOW")}">{t("COMMON.SHOW")}</button>
+              </div>
+              <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
+            </div>
+            <p id="nicky-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+          </div>
+        """
+    )
+
+    ticket_tailor_api_field = (
+        _locked_api_key_field(t("TENANTS.FORM_LABEL_API_KEY"), bool(tenant.ticket_tailor_api_key))
+        if not is_new
+        else f"""
+          <div>
+            <label for="ticket-tailor-api-key" class="block text-sm font-semibold text-slate-950">
+              {t("TENANTS.FORM_LABEL_API_KEY")}
+            </label>
+            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
+              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
+                <input id="ticket-tailor-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="ticket_tailor_api_key" type="password" placeholder="{e(ticket_tailor_placeholder)}" autocomplete="new-password">
+                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="ticket-tailor-api-key" aria-label="{t("COMMON.SHOW")}" title="{t("COMMON.SHOW")}">{t("COMMON.SHOW")}</button>
+              </div>
+              <button id="validate-ticket-tailor-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
+            </div>
+            <p id="ticket-tailor-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
+          </div>
+        """
+    )
+
     save_label = t("TENANTS.FORM_BUTTON_CREATE") if is_new else t("TENANTS.FORM_BUTTON_SAVE")
     page_title = t("TENANTS.FORM_TITLE_NEW") if is_new else f"{t('TENANTS.FORM_TITLE_EDIT')} {e(tenant.name or tenant.tenant_id)}"
     inactive_banner = f'<p class="notice-warn mb-5 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium"><i class="ph ph-lock text-base"></i>{t("TENANTS.NOTICE_INACTIVE")}</p>' if is_inactive else ""
@@ -1614,19 +1625,7 @@ def tenant_form(
           </div>
         </div>
         <div class="md:col-span-2 space-y-5">
-          <div>
-            <label for="nicky-api-key" class="block text-sm font-semibold text-slate-950">
-              {t("TENANTS.FORM_LABEL_API_KEY")}
-            </label>
-            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
-              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
-                <input id="nicky-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="nicky_api_key" type="password" placeholder="{e(nicky_api_placeholder)}" autocomplete="new-password">
-                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="nicky-api-key" aria-label="{t("COMMON.SHOW")}" title="{t("COMMON.SHOW")}">{t("COMMON.SHOW")}</button>
-              </div>
-              <button id="validate-nicky-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
-            </div>
-            <p id="nicky-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
-          </div>
+          {nicky_api_field}
           <div>
             <label class="block text-sm font-semibold text-slate-950">
               {t("TENANTS.FORM_LABEL_NICKY_EMAIL")}
@@ -1653,19 +1652,7 @@ def tenant_form(
           </div>
         </div>
         <div class="md:col-span-2 space-y-5">
-          <div>
-            <label for="ticket-tailor-api-key" class="block text-sm font-semibold text-slate-950">
-              {t("TENANTS.FORM_LABEL_API_KEY")}
-            </label>
-            <div class="mt-2 flex min-w-0 flex-col gap-3 sm:flex-row">
-              <div class="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-2 focus-within:ring-black">
-                <input id="ticket-tailor-api-key" class="h-11 min-w-0 flex-1 border-0 bg-transparent px-3 text-sm text-slate-700 outline-none" name="ticket_tailor_api_key" type="password" placeholder="{e(ticket_tailor_placeholder)}" autocomplete="new-password">
-                <button class="inline-flex h-11 w-14 shrink-0 items-center justify-center border-l border-slate-100 text-xs font-semibold text-slate-500 hover:bg-slate-50" type="button" data-toggle-secret="ticket-tailor-api-key" aria-label="{t("COMMON.SHOW")}" title="{t("COMMON.SHOW")}">{t("COMMON.SHOW")}</button>
-              </div>
-              <button id="validate-ticket-tailor-key" class="inline-flex h-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300" type="button">{t("COMMON.VALIDATE")}</button>
-            </div>
-            <p id="ticket-tailor-validation-status" class="mt-2 min-h-5 text-sm text-slate-500"></p>
-          </div>
+          {ticket_tailor_api_field}
           {webhook_block}
         </div>
       </div>

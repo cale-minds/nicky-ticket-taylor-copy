@@ -115,7 +115,8 @@
     "VALIDATION_ERROR_NICKY_EMPTY": "Paste a Nicky API key first.",
     "VALIDATION_ERROR_TT_EMPTY": "Paste a Ticket Tailor API key first.",
     "VALIDATION_FAILED": "Validation failed",
-    "REPLACE_NOTICE": "Note: your current active tenant \"{{name}}\" ({{tenant_id}}) will be automatically deactivated and its Nicky webhook removed when you save this new tenant."
+    "REPLACE_NOTICE": "Note: your current active tenant \"{{name}}\" ({{tenant_id}}) will be automatically deactivated and its Nicky webhook removed when you save this new tenant.",
+    "FORM_API_KEY_LOCKED": "API key can't be changed after creation. Create a new tenant to use a different key."
   },
   "ORDERS": {
     "TITLE": "Orders",

@@ -115,7 +115,8 @@
     "VALIDATION_ERROR_NICKY_EMPTY": "Cole uma chave de API Nicky primeiro.",
     "VALIDATION_ERROR_TT_EMPTY": "Cole uma chave de API do Ticket Tailor primeiro.",
     "VALIDATION_FAILED": "Validação falhou",
-    "REPLACE_NOTICE": "Atenção: seu tenant ativo atual \"{{name}}\" ({{tenant_id}}) será desativado automaticamente e seu webhook Nicky removido ao salvar este novo tenant."
+    "REPLACE_NOTICE": "Atenção: seu tenant ativo atual \"{{name}}\" ({{tenant_id}}) será desativado automaticamente e seu webhook Nicky removido ao salvar este novo tenant.",
+    "FORM_API_KEY_LOCKED": "A API key não pode ser alterada após a criação. Crie um novo tenant para usar outra chave."
   },
   "ORDERS": {
     "TITLE": "Pedidos",
