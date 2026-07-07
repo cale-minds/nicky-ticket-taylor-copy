@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Reden annulering ticket",
     "STATE_CONFIRMED": "Betaling bevestigd",
     "STATE_VOIDED": "Tickets geannuleerd",
-    "STATE_PENDING": "Bestelling in behandeling"
+    "STATE_PENDING": "Bestelling in behandeling",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Openen in Nicky-dashboard",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "Deze functie verwijst door naar het dashboard van de tenant-eigenaar. Log in als die gebruiker om dit te gebruiken."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Ontvangen",

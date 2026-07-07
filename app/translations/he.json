@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "סיבת ביטול הכרטיס",
     "STATE_CONFIRMED": "תשלום אושר",
     "STATE_VOIDED": "כרטיסים בוטלו",
-    "STATE_PENDING": "הזמנה ממתינה"
+    "STATE_PENDING": "הזמנה ממתינה",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "פתח בלוח הבקרה של Nicky",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "יכולת זו מפנה ללוח הבקרה של המשתמש שהוא בעל ה-tenant. התחבר כמשתמש זה כדי להשתמש בה."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "התקבל",

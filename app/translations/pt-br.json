@@ -158,7 +158,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Motivo do cancelamento",
     "STATE_CONFIRMED": "Pagamento confirmado",
     "STATE_VOIDED": "Ingressos cancelados",
-    "STATE_PENDING": "Pedido pendente"
+    "STATE_PENDING": "Pedido pendente",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Abrir no painel Nicky",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "Este recurso redireciona para o dashboard do usuário dono do tenant. Entre como esse usuário para usar."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Recebido",

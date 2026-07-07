@@ -504,6 +504,62 @@ def test_existing_tenant_form_shows_final_ticket_tailor_webhook_url(tmp_path) ->
     assert "http://localhost:4200/api/webhooks/ticket-tailor/demo-tenant" in ticket_tailor_block
 
 
+def test_admin_order_detail_disables_filtered_nicky_dashboard_for_other_user_tenant(
+    tmp_path,
+) -> None:
+    client = build_test_client(tmp_path, nicky_pay_base_url="https://pay.nicky.me")
+    authenticate_admin(client)
+    seed_dashboard_order(client, "demo-tenant", "or_123")
+    client.app.state.db.update_nicky_payment_request(
+        tenant_id="demo-tenant",
+        ticket_tailor_order_id="or_123",
+        payment_request_id="935c2ac4-97eb-4f25-b174-08deda5b7ec4",
+        bill_short_id="QYGAV1",
+        receiver_short_id="NICKY01",
+        payment_url="https://pay.nicky.me/payment-report/NICKY01?paymentId=QYGAV1",
+        status="PaymentPending",
+    )
+
+    response = client.get("/admin-ui/orders/or_123?tenant_id=demo-tenant")
+    html = response.text
+
+    assert response.status_code == 200
+    assert "Open in Nicky dashboard" in html
+    assert "This opens the dashboard of the tenant owner" in html
+    assert 'aria-disabled="true"' in html
+    assert "https://pay.nicky.me/overview?tab=paymentReport" not in html
+    assert "Create Nicky Payment Request" not in html
+    assert "Confirm Ticket Tailor payment" not in html
+    assert ">Actions<" not in html
+
+
+def test_tenant_owner_order_detail_links_to_filtered_nicky_dashboard(tmp_path) -> None:
+    client = build_test_client(
+        tmp_path,
+        admin_allowed_roles=["*"],
+        nicky_pay_base_url="https://pay.nicky.me",
+    )
+    seed_tenant(client, "owned-tenant", owner_auth_subject="auth0|common")
+    seed_dashboard_order(client, "owned-tenant", "or_123")
+    client.app.state.db.update_nicky_payment_request(
+        tenant_id="owned-tenant",
+        ticket_tailor_order_id="or_123",
+        payment_request_id="935c2ac4-97eb-4f25-b174-08deda5b7ec4",
+        bill_short_id="QYGAV1",
+        receiver_short_id="NICKY01",
+        payment_url="https://pay.nicky.me/payment-report/NICKY01?paymentId=QYGAV1",
+        status="PaymentPending",
+    )
+    authenticate_common_user_without_nicky_claim(client)
+
+    response = client.get("/admin-ui/orders/or_123?tenant_id=owned-tenant")
+    html = response.text
+
+    assert response.status_code == 200
+    assert 'href="https://pay.nicky.me/overview?tab=paymentReport&amp;shortId=QYGAV1"' in html
+    assert 'aria-disabled="true"' not in html
+
+
 def test_common_user_can_deactivate_owned_tenant(tmp_path) -> None:
     client = build_test_client(tmp_path, admin_allowed_roles=["Admin"])
     seed_tenant(client, "owned-tenant", owner_auth_subject="auth0|common")

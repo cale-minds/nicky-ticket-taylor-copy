@@ -598,13 +598,19 @@ def create_admin_ui_router(
                 offset=page_offset(log_page, DEFAULT_PAGE_SIZE),
             )
         ]
+        nicky_dashboard_button_html = nicky_dashboard_button(
+            order, settings, user=user, tenant=tenant_config
+        )
         body = f"""
         <section class="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 class="text-2xl font-semibold leading-8 text-slate-950">{t("ORDERS.DETAIL_TITLE", order_id=e(ticket_tailor_order_id))}</h1>
             <p class="mt-2 text-sm text-slate-500">{t("ORDERS.DETAIL_SUBTITLE", tenant=e(tenant_label), buyer=e(order.get("buyer_email") or ""))}</p>
           </div>
-          <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/orders?tenant_id={u(tenant)}">{t("ORDERS.DETAIL_BUTTON_BACK")}</a>
+          <div class="flex flex-wrap items-center gap-3">
+            {nicky_dashboard_button_html}
+            <a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50" href="/admin-ui/orders?tenant_id={u(tenant)}">{t("ORDERS.DETAIL_BUTTON_BACK")}</a>
+          </div>
         </section>
         {order_mapping_panel(order)}
         {order_actions(order, user=user, settings=settings)}
@@ -2057,21 +2063,78 @@ def order_actions(order: dict[str, Any], *, user: admin_auth.AdminUser, settings
         return ""
     tenant_id = str(order.get("tenant_id") or "")
     order_id = str(order.get("ticket_tailor_order_id") or "")
+    nicky_status = str(order.get("nicky_status") or "").strip().lower()
+    has_nicky_payment = bool(order.get("nicky_payment_request_id") or order.get("nicky_bill_short_id"))
+    is_paid_status = nicky_status in {"finished", "concluído"}
+    is_ticket_tailor_closed = bool(
+        order.get("ticket_tailor_confirmed_at") or order.get("ticket_tailor_tickets_voided_at")
+    )
+    actions: list[str] = []
+    if not has_nicky_payment:
+        actions.append(
+            f"""
+            <form method="post" action="/admin-ui/orders/{u(order_id)}/create-nicky-payment-request">
+              <input type="hidden" name="tenant_id" value="{e(tenant_id)}">
+              <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50">{t("ORDERS.DETAIL_ACTION_CREATE_PR")}</button>
+            </form>
+            """
+        )
+    if is_paid_status and not is_ticket_tailor_closed:
+        actions.append(
+            f"""
+            <form method="post" action="/admin-ui/orders/{u(order_id)}/confirm-ticket-tailor-payment">
+              <input type="hidden" name="tenant_id" value="{e(tenant_id)}">
+              <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">{t("ORDERS.DETAIL_ACTION_CONFIRM_TT")}</button>
+            </form>
+            """
+        )
+    if not actions:
+        return ""
+    actions_html = "".join(actions)
     return f"""
     <section class="mb-7 rounded-xl border border-slate-100 bg-white p-4 shadow-nicky">
       <h2 class="mb-4 text-lg font-semibold text-slate-950">{t("ORDERS.DETAIL_SECTION_ACTIONS")}</h2>
       <div class="flex flex-wrap items-center gap-3">
-        <form method="post" action="/admin-ui/orders/{u(order_id)}/create-nicky-payment-request">
-          <input type="hidden" name="tenant_id" value="{e(tenant_id)}">
-          <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 hover:bg-slate-50">{t("ORDERS.DETAIL_ACTION_CREATE_PR")}</button>
-        </form>
-        <form method="post" action="/admin-ui/orders/{u(order_id)}/confirm-ticket-tailor-payment">
-          <input type="hidden" name="tenant_id" value="{e(tenant_id)}">
-          <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50">{t("ORDERS.DETAIL_ACTION_CONFIRM_TT")}</button>
-        </form>
+        {actions_html}
       </div>
     </section>
     """
+
+
+def nicky_dashboard_button(
+    order: dict[str, Any],
+    settings: Settings,
+    *,
+    user: admin_auth.AdminUser,
+    tenant: TenantConfig | None,
+) -> str:
+    bill_short_id = order.get("nicky_bill_short_id")
+    if not bill_short_id:
+        return ""
+    if not can_open_tenant_nicky_dashboard(user, tenant):
+        hint = t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT")
+        return (
+            f'<span class="inline-flex h-10 shrink-0 cursor-not-allowed items-center justify-center '
+            f'rounded-lg bg-zinc-200 px-4 text-sm font-semibold text-zinc-500" title="{e(hint)}" '
+            f'aria-disabled="true">{t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD")}</span>'
+        )
+    url = build_nicky_dashboard_payment_orders_url(settings, str(bill_short_id))
+    return (
+        f'<a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-black px-4 text-sm '
+        f'font-semibold text-white hover:bg-zinc-800" href="{e(url)}" target="_blank" rel="noreferrer">'
+        f'{t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD")}</a>'
+    )
+
+
+def can_open_tenant_nicky_dashboard(
+    user: admin_auth.AdminUser, tenant: TenantConfig | None
+) -> bool:
+    if tenant is None:
+        return False
+    if tenant.owner_auth_subject and tenant.owner_auth_subject == user.subject:
+        return True
+    owner_uuid = admin_auth.nicky_user_uuid_claim(user)
+    return bool(owner_uuid and tenant.nicky_user_uuid == owner_uuid)
 
 
 def tenant_options(
@@ -2609,6 +2672,11 @@ def build_nicky_webhook_url(settings: Settings, tenant: TenantConfig) -> str:
     if tenant.nicky_webhook_token:
         url = f"{url}?token={urllib.parse.quote(tenant.nicky_webhook_token)}"
     return url
+
+
+def build_nicky_dashboard_payment_orders_url(settings: Settings, bill_short_id: str) -> str:
+    params = urllib.parse.urlencode({"tab": "paymentReport", "shortId": bill_short_id})
+    return f"{settings.nicky_pay_base_url}/overview?{params}"
 
 
 def get_tenant_or_404(db: Database, tenant_id: str) -> TenantConfig:

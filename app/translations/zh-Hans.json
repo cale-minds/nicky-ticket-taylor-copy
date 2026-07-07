@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "票据作废原因",
     "STATE_CONFIRMED": "支付已确认",
     "STATE_VOIDED": "票据已作废",
-    "STATE_PENDING": "订单待处理"
+    "STATE_PENDING": "订单待处理",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "在 Nicky 仪表板中打开",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "此功能会重定向到 tenant 所有者用户的仪表板。请以该用户身份登录后使用。"
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "接收时间",

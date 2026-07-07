@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Αιτία ακύρωσης εισιτηρίου",
     "STATE_CONFIRMED": "Πληρωμή επιβεβαιώθηκε",
     "STATE_VOIDED": "Εισιτήρια ακυρώθηκαν",
-    "STATE_PENDING": "Παραγγελία σε αναμονή"
+    "STATE_PENDING": "Παραγγελία σε αναμονή",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Άνοιγμα στον πίνακα Nicky",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "Αυτή η λειτουργία ανακατευθύνει στον πίνακα του ιδιοκτήτη του tenant. Συνδεθείτε ως αυτός ο χρήστης για να τη χρησιμοποιήσετε."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Ελήφθη",

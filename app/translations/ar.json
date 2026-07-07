@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "سبب إلغاء التذكرة",
     "STATE_CONFIRMED": "تم تأكيد الدفع",
     "STATE_VOIDED": "تذاكر ملغاة",
-    "STATE_PENDING": "طلب معلق"
+    "STATE_PENDING": "طلب معلق",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "فتح في لوحة تحكم Nicky",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "يفتح هذا المورد لوحة تحكم مالك الـ tenant. سجّل الدخول بهذا المستخدم لاستخدامه."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "تاريخ الاستلام",

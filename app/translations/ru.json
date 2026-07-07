@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Причина аннулирования билета",
     "STATE_CONFIRMED": "Оплата подтверждена",
     "STATE_VOIDED": "Билеты аннулированы",
-    "STATE_PENDING": "Заказ в ожидании"
+    "STATE_PENDING": "Заказ в ожидании",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Открыть в панели Nicky",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "Эта функция перенаправляет в панель пользователя-владельца tenant. Войдите как этот пользователь, чтобы использовать её."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Получен",

@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Motivo annullamento biglietto",
     "STATE_CONFIRMED": "Pagamento confermato",
     "STATE_VOIDED": "Biglietti annullati",
-    "STATE_PENDING": "Ordine in attesa"
+    "STATE_PENDING": "Ordine in attesa",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Apri nella dashboard Nicky",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "Questa funzione reindirizza alla dashboard dell'utente proprietario del tenant. Accedi come quell'utente per usarla."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Ricevuto",

@@ -155,7 +155,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Årsag til billetannullering",
     "STATE_CONFIRMED": "Betaling bekræftet",
     "STATE_VOIDED": "Billetter annulleret",
-    "STATE_PENDING": "Ordre afventer"
+    "STATE_PENDING": "Ordre afventer",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Åbn i Nicky-dashboardet",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "Denne funktion omdirigerer til dashboardet for tenant-ejeren. Log ind som den bruger for at bruge den."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Modtaget",

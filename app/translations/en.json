@@ -158,7 +158,9 @@
     "DETAIL_MAPPING_VOID_REASON": "Ticket void reason",
     "STATE_CONFIRMED": "Payment confirmed",
     "STATE_VOIDED": "Tickets voided",
-    "STATE_PENDING": "Order pending"
+    "STATE_PENDING": "Order pending",
+    "DETAIL_ACTION_OPEN_DASHBOARD": "Open in Nicky dashboard",
+    "DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT": "This opens the dashboard of the tenant owner. Log in as that user to use it."
   },
   "WEBHOOKS": {
     "TABLE_RECEIVED": "Received",
