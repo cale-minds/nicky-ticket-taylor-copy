@@ -1957,7 +1957,7 @@ def order_mobile_card(
       </div>
       <div class="flex shrink-0 flex-col items-end gap-2">
         {dashboard_button}
-        <a class="inline-flex h-9 items-center rounded-lg bg-black px-3 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a>
+        <a class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-black text-base text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}" title="{e(t("COMMON.OPEN"))}"><i class="ph ph-sidebar-simple" aria-hidden="true"></i><span class="sr-only">{t("COMMON.OPEN")}</span></a>
       </div>
     </div>
     """
@@ -1992,7 +1992,7 @@ def order_row(
       <td class="border-b border-slate-100 px-4 py-3 align-top text-right">
         <div class="flex items-center justify-end gap-2 whitespace-nowrap">
           {dashboard_button}
-          <a class="inline-flex h-9 items-center rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a>
+          <a class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-black text-base text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}" title="{e(t("COMMON.OPEN"))}"><i class="ph ph-sidebar-simple" aria-hidden="true"></i><span class="sr-only">{t("COMMON.OPEN")}</span></a>
         </div>
       </td>
     </tr>
@@ -2161,24 +2161,26 @@ def nicky_dashboard_button(
     bill_short_id = order.get("nicky_bill_short_id")
     if not bill_short_id:
         return ""
-    size_classes = (
-        "h-9 px-3 text-xs"
-        if compact
-        else "h-10 px-4 text-sm"
-    )
     label = t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD")
+    icon = '<i class="ph ph-arrow-line-up-right text-base" aria-hidden="true"></i>'
+    if compact:
+        size_classes = "h-9 w-9 text-base"
+        content = f'{icon}<span class="sr-only">{label}</span>'
+    else:
+        size_classes = "h-10 gap-2 px-4 text-sm"
+        content = f'{icon}<span>{label}</span>'
     if not can_open_tenant_nicky_dashboard(user, tenant):
         hint = t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT")
         return (
             f'<span class="inline-flex {size_classes} shrink-0 cursor-not-allowed items-center justify-center '
             f'rounded-lg bg-zinc-200 font-semibold text-zinc-500" title="{e(hint)}" '
-            f'aria-disabled="true">{label}</span>'
+            f'aria-disabled="true">{content}</span>'
         )
     url = build_nicky_dashboard_payment_orders_url(settings, str(bill_short_id))
     return (
         f'<a class="inline-flex {size_classes} shrink-0 items-center justify-center rounded-lg bg-black '
-        f'font-semibold text-white hover:bg-zinc-800" href="{e(url)}" target="_blank" rel="noreferrer">'
-        f'{label}</a>'
+        f'font-semibold text-white hover:bg-zinc-800" href="{e(url)}" target="_blank" rel="noreferrer" title="{e(label)}">'
+        f'{content}</a>'
     )
 
 
