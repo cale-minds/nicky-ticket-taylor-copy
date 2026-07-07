@@ -239,7 +239,7 @@ def create_admin_ui_router(
           <h2 class="mb-3 text-lg font-semibold text-slate-950">{t("DASHBOARD.RECENT_ORDERS")}</h2>
           <div class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
             {order_filters_form(order_filters, webhook_filters, tenants, action="/overview", show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
-            {orders_table(orders, tenant_names={tn.tenant_id: tn.name for tn in tenants})}
+            {orders_table(orders, user=user, settings=settings, tenants={tn.tenant_id: tn for tn in tenants}, tenant_names={tn.tenant_id: tn.name for tn in tenants})}
             {pagination_controls(orders_page_number, orders_page_size, orders_total, "/overview", request.query_params, "orders_page", size_param="orders_per_page", size_options=PAGE_SIZE_OPTIONS)}
           </div>
         </section>
@@ -560,7 +560,7 @@ def create_admin_ui_router(
         </section>
         <div id="orders-card" class="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-nicky">
           {orders_page_filters_form(order_filters, tenants, show_tenant_filter=scope_shows_tenant_filter(tenant_scope), allow_all_tenants=not tenant_scope.scoped)}
-          {orders_table(orders, tenant_names={t.tenant_id: t.name for t in tenants})}
+          {orders_table(orders, user=user, settings=settings, tenants={t.tenant_id: t for t in tenants}, tenant_names={t.tenant_id: t.name for t in tenants})}
           {pagination_controls(page_number, page_size, total, "/admin-ui/orders", request.query_params, "page", size_param="per_page", size_options=PAGE_SIZE_OPTIONS)}
         </div>
         """
@@ -1871,9 +1871,34 @@ def truncated_id(value: Any) -> str:
     return f'<abbr class="cursor-help font-mono text-xs" title="{e(text)}">{e(short)}</abbr>'
 
 
-def orders_table(orders: list[dict[str, Any]], tenant_names: dict[str, str] | None = None) -> str:
-    rows = "".join(order_row(order, tenant_names=tenant_names) for order in orders)
-    mobile_cards = "".join(order_mobile_card(order, tenant_names=tenant_names) for order in orders)
+def orders_table(
+    orders: list[dict[str, Any]],
+    *,
+    user: admin_auth.AdminUser,
+    settings: Settings,
+    tenants: dict[str, TenantConfig],
+    tenant_names: dict[str, str] | None = None,
+) -> str:
+    rows = "".join(
+        order_row(
+            order,
+            user=user,
+            settings=settings,
+            tenant=tenants.get(str(order.get("tenant_id") or "")),
+            tenant_names=tenant_names,
+        )
+        for order in orders
+    )
+    mobile_cards = "".join(
+        order_mobile_card(
+            order,
+            user=user,
+            settings=settings,
+            tenant=tenants.get(str(order.get("tenant_id") or "")),
+            tenant_names=tenant_names,
+        )
+        for order in orders
+    )
     empty_state = f'<div class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-transactions.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("ORDERS.NO_ORDERS")}</p><p class="mt-1 text-xs text-slate-400">{t("ORDERS.NO_ORDERS_HINT")}</p></div>'
     if not rows:
         rows = f'<tr><td colspan="9" class="px-4 py-10 text-center"><img src="/admin-ui/assets/no-transactions.svg" alt="" class="mx-auto mb-3 h-16 w-16 opacity-80"><p class="text-sm font-semibold text-slate-700">{t("ORDERS.NO_ORDERS")}</p><p class="mt-1 text-xs text-slate-400">{t("ORDERS.NO_ORDERS_HINT")}</p></td></tr>'
@@ -1903,11 +1928,19 @@ def orders_table(orders: list[dict[str, Any]], tenant_names: dict[str, str] | No
     """
 
 
-def order_mobile_card(order: dict[str, Any], tenant_names: dict[str, str] | None = None) -> str:
+def order_mobile_card(
+    order: dict[str, Any],
+    *,
+    user: admin_auth.AdminUser,
+    settings: Settings,
+    tenant: TenantConfig | None,
+    tenant_names: dict[str, str] | None = None,
+) -> str:
     tenant_id = str(order.get("tenant_id") or "")
     order_id = str(order.get("ticket_tailor_order_id") or "")
     tenant_name = (tenant_names or {}).get(tenant_id)
     tenant_label = tenant_name or compact_identifier(tenant_id)
+    dashboard_button = nicky_dashboard_button(order, settings, user=user, tenant=tenant, compact=True)
     return f"""
     <div class="flex items-start justify-between gap-3 px-4 py-4">
       <div class="min-w-0 flex-1">
@@ -1922,12 +1955,22 @@ def order_mobile_card(order: dict[str, Any], tenant_names: dict[str, str] | None
           <span class="text-xs text-slate-400">{e(order.get("updated_at") or "")}</span>
         </div>
       </div>
-      <a class="shrink-0 inline-flex h-9 items-center rounded-lg bg-black px-3 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a>
+      <div class="flex shrink-0 flex-col items-end gap-2">
+        {dashboard_button}
+        <a class="inline-flex h-9 items-center rounded-lg bg-black px-3 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a>
+      </div>
     </div>
     """
 
 
-def order_row(order: dict[str, Any], tenant_names: dict[str, str] | None = None) -> str:
+def order_row(
+    order: dict[str, Any],
+    *,
+    user: admin_auth.AdminUser,
+    settings: Settings,
+    tenant: TenantConfig | None,
+    tenant_names: dict[str, str] | None = None,
+) -> str:
     tenant_id = str(order.get("tenant_id") or "")
     order_id = str(order.get("ticket_tailor_order_id") or "")
     tenant_name = (tenant_names or {}).get(tenant_id)
@@ -1935,6 +1978,7 @@ def order_row(order: dict[str, Any], tenant_names: dict[str, str] | None = None)
         f'<strong class="font-semibold text-slate-950">{e(tenant_name)}</strong><br><small class="text-slate-400">{e(compact_identifier(tenant_id))}</small>'
         if tenant_name else e(compact_identifier(tenant_id))
     )
+    dashboard_button = nicky_dashboard_button(order, settings, user=user, tenant=tenant, compact=True)
     return f"""
     <tr class="bg-white transition-colors duration-150 even:bg-[#f8f8f9] hover:bg-gray-50/80">
       <td class="border-b border-slate-100 px-4 py-3 align-top"><strong class="font-semibold text-slate-950">{e(order_id)}</strong></td>
@@ -1945,7 +1989,12 @@ def order_row(order: dict[str, Any], tenant_names: dict[str, str] | None = None)
       <td class="border-b border-slate-100 px-4 py-3 align-top">{nicky_status_badge(order.get("nicky_status"))}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{ticket_tailor_state_cell(order)}</td>
       <td class="border-b border-slate-100 px-4 py-3 align-top">{e(order.get("updated_at") or "-")}</td>
-      <td class="border-b border-slate-100 px-4 py-3 align-top text-right"><a class="inline-flex h-9 items-center rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a></td>
+      <td class="border-b border-slate-100 px-4 py-3 align-top text-right">
+        <div class="flex items-center justify-end gap-2 whitespace-nowrap">
+          {dashboard_button}
+          <a class="inline-flex h-9 items-center rounded-lg bg-black px-4 text-sm font-semibold text-white hover:bg-zinc-800" href="/admin-ui/orders/{u(order_id)}?tenant_id={u(tenant_id)}">{t("COMMON.OPEN")}</a>
+        </div>
+      </td>
     </tr>
     """
 
@@ -2107,22 +2156,29 @@ def nicky_dashboard_button(
     *,
     user: admin_auth.AdminUser,
     tenant: TenantConfig | None,
+    compact: bool = False,
 ) -> str:
     bill_short_id = order.get("nicky_bill_short_id")
     if not bill_short_id:
         return ""
+    size_classes = (
+        "h-9 px-3 text-xs"
+        if compact
+        else "h-10 px-4 text-sm"
+    )
+    label = t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD")
     if not can_open_tenant_nicky_dashboard(user, tenant):
         hint = t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD_DISABLED_HINT")
         return (
-            f'<span class="inline-flex h-10 shrink-0 cursor-not-allowed items-center justify-center '
-            f'rounded-lg bg-zinc-200 px-4 text-sm font-semibold text-zinc-500" title="{e(hint)}" '
-            f'aria-disabled="true">{t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD")}</span>'
+            f'<span class="inline-flex {size_classes} shrink-0 cursor-not-allowed items-center justify-center '
+            f'rounded-lg bg-zinc-200 font-semibold text-zinc-500" title="{e(hint)}" '
+            f'aria-disabled="true">{label}</span>'
         )
     url = build_nicky_dashboard_payment_orders_url(settings, str(bill_short_id))
     return (
-        f'<a class="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-black px-4 text-sm '
+        f'<a class="inline-flex {size_classes} shrink-0 items-center justify-center rounded-lg bg-black '
         f'font-semibold text-white hover:bg-zinc-800" href="{e(url)}" target="_blank" rel="noreferrer">'
-        f'{t("ORDERS.DETAIL_ACTION_OPEN_DASHBOARD")}</a>'
+        f'{label}</a>'
     )
 
 
