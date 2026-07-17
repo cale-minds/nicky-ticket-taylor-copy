@@ -2659,10 +2659,10 @@ def ticket_tailor_state_cell(order: dict[str, Any]) -> str:
 def ticket_tailor_state_notice(order: dict[str, Any]) -> str:
     if not order.get("ticket_tailor_tickets_voided_at"):
         return ""
-    return """
+    return f"""
     <p class="notice-warn mb-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm font-medium">
       <i class="ph ph-warning mt-0.5 shrink-0"></i>
-      {t("ORDERS.DETAIL_VOID_NOTICE")}
+      {e(t("ORDERS.DETAIL_VOID_NOTICE"))}
     </p>
     """
 

@@ -10,7 +10,7 @@ from itsdangerous import TimestampSigner
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import admin_auth
-from app.admin_ui import create_admin_ui_router
+from app.admin_ui import create_admin_ui_router, ticket_tailor_state_notice
 from app.config import Settings
 from app.db import Database
 from app.nicky import NickyApiError, NickyClient
@@ -66,6 +66,15 @@ class FailingNickyValidationClient(NickyClient):
             "Could not validate Nicky API key: Nicky returned 401 Unauthorized",
             status_code=401,
         )
+
+
+def test_ticket_tailor_state_notice_renders_translation() -> None:
+    notice = ticket_tailor_state_notice(
+        {"ticket_tailor_tickets_voided_at": "2026-07-09T03:12:35.693000"}
+    )
+
+    assert "Issued tickets were voided through the Ticket Tailor API." in notice
+    assert '{t("ORDERS.DETAIL_VOID_NOTICE")}' not in notice
 
 
 def build_test_client(tmp_path, nicky_client_class=NickyClient, **settings_overrides) -> TestClient:
