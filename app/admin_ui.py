@@ -4,6 +4,7 @@ import datetime
 import html
 import json
 import secrets
+import traceback
 import urllib.parse
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -37,6 +38,36 @@ AdminDependency = Callable[..., Any]
 DEFAULT_PAGE_SIZE = 10
 DASHBOARD_PAGE_SIZE = 10
 NO_TENANT_SCOPE = "__nicky_no_tenant_scope__"
+
+
+def auth0_debug_error_response(request: Request, exc: Exception) -> HTMLResponse:
+    trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    body = f"""
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <title>Auth0 callback error</title>
+        <style>
+          body {{ margin: 0; background: #0f172a; color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }}
+          main {{ padding: 24px; }}
+          h1 {{ color: #f8fafc; font-family: system-ui, sans-serif; font-size: 22px; margin: 0 0 16px; }}
+          p {{ color: #cbd5e1; font-family: system-ui, sans-serif; }}
+          pre {{ overflow: auto; white-space: pre-wrap; background: #020617; border: 1px solid #334155; border-radius: 8px; padding: 16px; }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Auth0 callback error</h1>
+          <p>DEBUG_AUTH0_ERRORS is enabled. Disable it after collecting this traceback.</p>
+          <pre>Request URL: {html.escape(str(request.url))}
+
+{html.escape(trace)}</pre>
+        </main>
+      </body>
+    </html>
+    """
+    return HTMLResponse(body, status_code=500)
 
 
 @dataclass(frozen=True)
@@ -110,40 +141,45 @@ def create_admin_ui_router(
     async def complete_auth0_login(
         request: Request, code: str | None = None, state: str | None = None
     ):
-        if not admin_auth.auth0_enabled(settings):
-            raise HTTPException(status_code=404, detail="Auth0 is not configured")
-        if not code:
-            raise HTTPException(status_code=400, detail="Missing Auth0 code")
+        try:
+            if not admin_auth.auth0_enabled(settings):
+                raise HTTPException(status_code=404, detail="Auth0 is not configured")
+            if not code:
+                raise HTTPException(status_code=400, detail="Missing Auth0 code")
 
-        expected_nonce = admin_auth.validate_callback_state(request, state)
-        token_response = await admin_auth.exchange_auth0_code(
-            settings,
-            code,
-            code_verifier=admin_auth.get_code_verifier(request),
-        )
-        id_token = token_response.get("id_token")
-        if not id_token:
-            raise HTTPException(status_code=401, detail="Auth0 did not return an id_token")
+            expected_nonce = admin_auth.validate_callback_state(request, state)
+            token_response = await admin_auth.exchange_auth0_code(
+                settings,
+                code,
+                code_verifier=admin_auth.get_code_verifier(request),
+            )
+            id_token = token_response.get("id_token")
+            if not id_token:
+                raise HTTPException(status_code=401, detail="Auth0 did not return an id_token")
 
-        claims = admin_auth.decode_and_verify_jwt(
-            settings, str(id_token), audience=settings.auth0_client_id
-        )
-        admin_auth.assert_nonce(claims, expected_nonce)
-        user = admin_auth.user_from_claims(claims, auth_method="auth0")
+            claims = admin_auth.decode_and_verify_jwt(
+                settings, str(id_token), audience=settings.auth0_client_id
+            )
+            admin_auth.assert_nonce(claims, expected_nonce)
+            user = admin_auth.user_from_claims(claims, auth_method="auth0")
 
-        # Maintain the auth-subject <-> login-email directory so admins can later
-        # resolve a user's owner_auth_subject from the email they type.
-        if user.subject:
-            db.upsert_user(user.subject, user.email, user.name)
-            # Claim any active tenant created for this email by an admin (no owner yet).
-            orphan = db.find_active_tenant_by_user_email(user.email)
-            if orphan and not orphan.owner_auth_subject:
-                db.upsert_tenant(replace(orphan, owner_auth_subject=user.subject))
+            # Maintain the auth-subject <-> login-email directory so admins can later
+            # resolve a user's owner_auth_subject from the email they type.
+            if user.subject:
+                db.upsert_user(user.subject, user.email, user.name)
+                # Claim any active tenant created for this email by an admin (no owner yet).
+                orphan = db.find_active_tenant_by_user_email(user.email)
+                if orphan and not orphan.owner_auth_subject:
+                    db.upsert_tenant(replace(orphan, owner_auth_subject=user.subject))
 
-        return_to = admin_auth.consume_return_to(request, settings)
-        admin_auth.clear_session(request)
-        admin_auth.set_session_user(request, user)
-        return RedirectResponse(return_to, status_code=303)
+            return_to = admin_auth.consume_return_to(request, settings)
+            admin_auth.clear_session(request)
+            admin_auth.set_session_user(request, user)
+            return RedirectResponse(return_to, status_code=303)
+        except Exception as exc:
+            if not settings.debug_auth0_errors:
+                raise
+            return auth0_debug_error_response(request, exc)
 
     @router.get("/admin-ui/callback")
     @router.get("/authentication/login-callback")

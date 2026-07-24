@@ -108,6 +108,7 @@ class Settings:
         "ADMIN_SESSION_SECRET", "development-admin-session-secret"
     )
     admin_session_max_age_seconds: int = _int_env("ADMIN_SESSION_MAX_AGE_SECONDS", 28800)
+    debug_auth0_errors: bool = _bool_env("DEBUG_AUTH0_ERRORS", True)
     auth0_domain: str = os.getenv("AUTH0_DOMAIN", "").strip().rstrip("/")
     auth0_client_id: str = os.getenv("AUTH0_CLIENT_ID", "")
     auth0_client_secret: str = os.getenv("AUTH0_CLIENT_SECRET", "")

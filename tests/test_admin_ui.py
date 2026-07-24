@@ -306,6 +306,32 @@ def test_admin_ui_auth0_login_redirects_to_universal_login(tmp_path) -> None:
     assert auth0_params.get("nonce")
 
 
+def test_admin_ui_auth0_callback_can_render_debug_traceback(tmp_path, monkeypatch) -> None:
+    async def fail_exchange(*args, **kwargs):
+        raise RuntimeError("simulated auth0 token exchange failure")
+
+    monkeypatch.setattr(admin_auth, "exchange_auth0_code", fail_exchange)
+    client = build_test_client(
+        tmp_path,
+        app_base_url="http://testserver",
+        auth0_domain="nicky-prod.us.auth0.com",
+        auth0_client_id="auth0-client-id",
+    )
+    login_response = client.get("/admin-ui/login?return_to=%2Fadmin-ui", follow_redirects=False)
+    auth0_url = urlparse(login_response.headers["location"])
+    auth0_params = parse_qs(auth0_url.query)
+
+    response = client.get(
+        f"/admin-ui/callback?code=bad-code&state={auth0_params['state'][0]}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 500
+    assert "Auth0 callback error" in response.text
+    assert "Traceback (most recent call last)" in response.text
+    assert "RuntimeError: simulated auth0 token exchange failure" in response.text
+
+
 def test_admin_ui_auth0_local_angular_compatibility_routes(tmp_path) -> None:
     client = build_test_client(
         tmp_path,
